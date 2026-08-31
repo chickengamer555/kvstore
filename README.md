@@ -3,7 +3,7 @@
 An embedded key-value store in Go whose durability claim is tested rather than
 asserted: a harness forks a child process, kills it at a randomised point under
 a recorded seed, reopens the store and checks that every acknowledged write
-survived. 240 seeds run in CI on every push.
+survived. A corpus of 240 seeds runs in CI on every push.
 
 [![ci](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml/badge.svg)](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml)
 
@@ -206,14 +206,23 @@ The durability claims here are POSIX claims, and CI runs on `ubuntu-latest`
 because that is where they mean something. The Windows job runs the same suite
 and is informative rather than authoritative.
 
-| | Linux | Windows |
+| | Linux (CI) | Windows (author's machine) |
 |---|---|---|
-| acknowledgement after the log's fsync | proven | proven |
-| checksum and sequence chain end recovery | proven | proven |
-| deterministic recovery | proven | proven |
-| bounded log under sustained writes | proven | proven |
-| randomised crash corpus, 240 seeds | proven | proven, different kernel behaviour |
-| **directory fsync on log creation** | **proven** | **not applicable - see below** |
+| acknowledgement after the log's fsync | checked by CI | run, green |
+| checksum and sequence chain end recovery | checked by CI | run, green |
+| deterministic recovery | checked by CI | run, green |
+| bounded log under sustained writes | checked by CI | run, green |
+| randomised crash corpus, 240 seeds | checked by CI | run, green - see the distribution above |
+| **directory fsync on log creation** | **only checked by CI** | **not applicable - see below** |
+
+Read that first column as what CI checks, not as something the author has
+watched succeed. At the time of writing this repository has no CI history at
+all: every row has been run on Windows and none on Linux, on any machine. The
+badge at the top of this file is the live answer. If it is green, the Linux
+column is a result; until then it is a plan.
+
+The last row is the one that only Linux can settle, and it is the reason CI
+exists here rather than being decoration.
 
 Creating a file and fsyncing it makes the file's contents durable. It does not
 make the directory entry that names the file durable: that entry is the parent
