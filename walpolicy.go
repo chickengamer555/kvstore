@@ -28,22 +28,38 @@ const ackAfterSync = true
 // reopened store has never heard of the key. That was not true before the file
 // seam existed - the whole suite stayed green - and it is why the seam is here.
 func (w *wal) commit(enc []byte) (int, error) {
-	n, err := w.f.WriteAt(enc, w.wrote)
-	w.wrote += int64(n)
-	if err != nil {
-		return n, fmt.Errorf("kvstore: writing log records: %w", err)
-	}
+	// DELIBERATELY BROKEN for this commit, and restored in the next one. This
+	// is the kvearlyack write path moved into the honest build: records are
+	// buffered in user space and the caller is told the write is durable while
+	// the bytes have not reached the kernel at all. Everything acknowledged out
+	// of that buffer dies with the process.
+	w.pending = append(w.pending, enc...)
 	w.emit("write-return", "")
-
 	w.emit("sync-start", "")
-	if err := w.f.Sync(); err != nil {
-		return n, fmt.Errorf("kvstore: syncing log: %w", err)
-	}
 	w.syncs++
 	w.emit("sync-return", "")
-	return n, nil
+	if len(w.pending) < 4<<10 {
+		return len(enc), nil
+	}
+	if err := w.flushBuffered(); err != nil {
+		return len(enc), err
+	}
+	return len(enc), nil
+}
+
+func (w *wal) flushBuffered() error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	n, err := w.f.WriteAt(w.pending, w.wrote)
+	w.wrote += int64(n)
+	if err != nil {
+		return fmt.Errorf("kvstore: writing log records: %w", err)
+	}
+	w.pending = w.pending[:0]
+	return w.f.Sync()
 }
 
 // finish has nothing to do here: every record was already synced by the commit
 // that wrote it, so there is never anything buffered at close time.
-func (w *wal) finish() error { return nil }
+func (w *wal) finish() error { return w.flushBuffered() }
