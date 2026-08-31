@@ -58,8 +58,8 @@ under it, in ascending order of how long you have to wait:
 ```sh
 go run ./crashtest/cmd/crashrepro -seed 7960286522194355700        # one crash, ~2s
 go run -tags kvearlyack ./crashtest/cmd/crashrepro -seed 7960286522194355700
-go test -count=1 -run 'SimDisk|PowerCut|Torn|OutOfOrder|DirectoryEntry|Checkpoint|Failed|ShortWrite' ./
-go test -count=1 ./...                                            # everything, ~4 min
+go test -count=1 -run 'SimDisk|PowerCut|Torn|OutOfOrder|DirectoryEntry|Checkpoint|Fail|ShortWrite|Lifted' ./
+go test -count=1 ./...                                            # everything, ~3 min
 ```
 
 The second builds a deliberately broken store - one that acknowledges writes
