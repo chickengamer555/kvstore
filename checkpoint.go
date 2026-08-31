@@ -84,12 +84,21 @@ func loadCheckpoint(fsys fileSystem) (*checkpoint, bool) {
 
 // writeCheckpoint makes a checkpoint durable, then makes its name durable.
 //
-// Write to a temporary name, fsync the contents, sync the directory so the
-// temporary name itself exists, rename over the real name, sync the directory
-// again so the rename is durable. Rename is atomic, so a reader either sees
-// the whole old checkpoint or the whole new one and never a mixture - which is
-// what lets loadCheckpoint treat a bad checksum as "a crash happened during a
-// checkpoint" rather than "the store is corrupt".
+// Write to a temporary name, fsync the contents, rename over the real name,
+// fsync the directory. Rename is atomic, so a reader either sees the whole old
+// checkpoint or the whole new one and never a mixture - which is what lets
+// loadCheckpoint treat a bad checksum as "a crash happened during a
+// checkpoint" rather than "the store is corrupt". Atomic is not the same as
+// durable, though: until the directory is fsynced a reopening process still
+// finds the old name, which is what the last step is for and what
+// TestTheCheckpointIsDurableAsSoonAsItIsInstalled fails without.
+//
+// There used to be a fourth step, a directory sync between the fsync and the
+// rename, to make the temporary name itself durable first. It is gone. One
+// fsync on the directory after the rename makes the whole of the directory
+// state durable, the create included, so the earlier one changed nothing that
+// any crash could observe - and no test could be written that failed when it
+// was removed. See the commit that took it out.
 func writeCheckpoint(fsys fileSystem, seq uint64, payload []byte) error {
 	f, err := fsys.createTrunc(checkpointTempName)
 	if err != nil {
@@ -103,9 +112,6 @@ func writeCheckpoint(fsys fileSystem, seq uint64, payload []byte) error {
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("kvstore: closing checkpoint: %w", err)
-	}
-	if err := fsys.syncDir(); err != nil {
-		return fmt.Errorf("kvstore: syncing directory before checkpoint rename: %w", err)
 	}
 	if err := fsys.rename(checkpointTempName, checkpointName); err != nil {
 		return fmt.Errorf("kvstore: installing checkpoint: %w", err)
