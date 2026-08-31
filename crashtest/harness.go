@@ -217,9 +217,17 @@ type Result struct {
 func (r Result) OK() bool { return len(r.Failures) == 0 }
 
 // Kinds returns the sorted, deduplicated failure categories - what a
-// reproduction has to match. The exact keys involved shift between runs of the
-// same seed because the instant the signal lands is not under the harness's
-// control; the category does not.
+// reproduction has to match.
+//
+// The distinction this exists for is between re-running a seed and replaying a
+// preserved directory. Re-running a seed produces a different set of keys,
+// because the instant the signal lands is the scheduler's business and not the
+// harness's, so only the category is stable across re-runs. Replaying fixed
+// bytes is a different matter entirely: nothing there varies, and the findings
+// themselves - the strings, in order - must be identical. An earlier version of
+// this comment blamed the scheduler for variation in bytes that cannot vary,
+// which excused a genuine defect in verify(); TestReplayedFindingsAreInAStableOrder
+// is what settles it now.
 func (r Result) Kinds() []string {
 	seen := map[string]bool{}
 	for _, f := range r.Failures {
@@ -475,7 +483,20 @@ func verify(res *Result) error {
 	}
 
 	// B1: every acknowledged write is present and correct.
-	for key, value := range want {
+	//
+	// Sorted, and this is not tidiness. Ranging over `want` directly put the
+	// findings in Go's randomised map order, so replaying one preserved crash
+	// directory reported the same failures in a different sequence every time -
+	// which makes a failure impossible to diff against a fix, and was the same
+	// mistake the recovered snapshot had already been sorted to avoid.
+	wantKeys := make([]string, 0, len(want))
+	for key := range want {
+		wantKeys = append(wantKeys, key)
+	}
+	sort.Strings(wantKeys)
+
+	for _, key := range wantKeys {
+		value := want[key]
 		got, ok := s.Get(key)
 		if key == inflight.Key {
 			if !ok && !inflight.Delete {

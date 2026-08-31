@@ -77,10 +77,11 @@ type ShapeCounts map[string]int
 // NewShapeCounts starts every known shape at zero, which is what makes a zero
 // row printable.
 func NewShapeCounts() ShapeCounts {
-	// STUB: an empty tally, which is exactly the bug this is meant to fix -
-	// only shapes that occur get a key, so a shape that never happens can
-	// never print a row.
-	return ShapeCounts{}
+	c := ShapeCounts{}
+	for _, s := range Shapes() {
+		c[s] = 0
+	}
+	return c
 }
 
 // Add counts one result.
@@ -88,12 +89,19 @@ func (c ShapeCounts) Add(r Result) { c[Shape(r)]++ }
 
 // Rows returns every shape in print order with its count, zeros included.
 func (c ShapeCounts) Rows() []ShapeRow {
-	// STUB: ranges the observed keys, so it can only report what happened.
-	out := make([]ShapeRow, 0, len(c))
+	out := make([]ShapeRow, 0, len(Shapes()))
 	for _, s := range Shapes() {
-		if n, ok := c[s]; ok {
-			out = append(out, ShapeRow{Shape: s, N: n})
-		}
+		out = append(out, ShapeRow{Shape: s, N: c[s]})
 	}
 	return out
+}
+
+// Total is how many results have been counted, which is how a reader checks
+// the rows add up to the number of seeds that were run.
+func (c ShapeCounts) Total() int {
+	n := 0
+	for _, s := range Shapes() {
+		n += c[s]
+	}
+	return n
 }

@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"sync"
 
 	"github.com/chickengamer555/kvstore"
@@ -182,7 +181,13 @@ func corpusShapes(child crashtest.Child, workers int) error {
 	}
 
 	var mu sync.Mutex
-	counts := map[string]int{}
+	// Every shape starts at zero, so a shape that never happens still prints a
+	// row. That matters more than it sounds: the rows this table is quoted for
+	// are the zeros, and a tally built from observed keys alone cannot produce
+	// one - the reader would have to infer it from a missing line, which is
+	// indistinguishable from the classifier having stopped firing.
+	counts := crashtest.NewShapeCounts()
+	harnessErrors := 0
 	checkpointed, failed := 0, 0
 
 	work := make(chan uint64)
@@ -200,9 +205,9 @@ func corpusShapes(child crashtest.Child, workers int) error {
 				mu.Lock()
 				switch {
 				case runErr != nil:
-					counts["harness error"]++
+					harnessErrors++
 				default:
-					counts[shape(res)]++
+					counts.Add(res)
 					if res.Report.UsedCheckpoint {
 						checkpointed++
 					}
@@ -224,40 +229,18 @@ func corpusShapes(child crashtest.Child, workers int) error {
 
 	g := kvstore.Platform()
 	fmt.Printf("| | %d seeds, %s/%s |\n|---|---|\n", len(seeds), runtime.GOOS, runtime.GOARCH)
-	for _, k := range sortedKeys(counts) {
-		fmt.Printf("| %s | %d |\n", k, counts[k])
+	for _, row := range counts.Rows() {
+		fmt.Printf("| %s | %d |\n", row.Shape, row.N)
 	}
+	fmt.Printf("| **classified** | **%d** |\n", counts.Total())
 	fmt.Printf("| recovered through a checkpoint | %d |\n", checkpointed)
 	fmt.Printf("| seeds that failed | %d |\n", failed)
+	if harnessErrors > 0 {
+		fmt.Printf("| seeds the harness could not run | %d |\n", harnessErrors)
+	}
 	fmt.Printf("\ndirectory fsync on this build: %v (%s)\n", g.DirSync, g.Platform)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d seeds failed", failed, len(seeds))
 	}
 	return nil
-}
-
-func shape(r crashtest.Result) string {
-	switch {
-	case r.KilledInCheckpointWrite:
-		return "killed while writing a checkpoint"
-	case r.Report.CheckpointRejected:
-		return "checkpoint rejected on its checksum"
-	case r.Report.Segments > 1:
-		return "killed between rotating the log and deleting the old segments"
-	case r.Report.Skipped > 0:
-		return "killed before the superseded segments were deleted"
-	case r.Report.Stopped != "end-of-log":
-		return "recovery stopped at a damaged record (" + string(r.Report.Stopped) + ")"
-	default:
-		return "log ended on a record boundary"
-	}
-}
-
-func sortedKeys(m map[string]int) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
