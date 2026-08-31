@@ -458,3 +458,156 @@ func TestTheBrokenBuildFailsThePowerCutTest(t *testing.T) {
 	}
 	t.Logf("the deliberately broken build loses acknowledged writes under the simulated power cut, deterministically")
 }
+
+// runUntilPowerCut runs fn and reports whether a simulated power cut stopped
+// it part way through, and at which operation.
+//
+// The disk panics when an armed crash point fires, because a process does not
+// carry on running after the power goes and neither may the store. Anything
+// else that panics is a real failure and is re-raised untouched.
+func runUntilPowerCut(t *testing.T, fn func()) (string, bool) {
+	t.Helper()
+	op, cut := "", false
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			pc, ok := r.(simPowerCut)
+			if !ok {
+				panic(r)
+			}
+			op, cut = pc.op, true
+		}()
+		fn()
+	}()
+	return op, cut
+}
+
+// B6, and the half of the directory-fsync claim that had nothing behind it.
+//
+// Checkpointing is the one path in this store that deletes data on purpose,
+// and an unlink is a directory write like any other: until the directory is
+// fsynced, the entry can come back. If it does, the log the checkpoint just
+// superseded is on the platter again, and the log is bounded only until the
+// machine loses power - which is the one moment the bound was for.
+//
+// Delete `s.fsys.syncDir()` from the end of checkpointLocked and this test
+// fails, naming the segment that came back. That is checked, not argued: it
+// was green against that deletion until the simulated disk started staging
+// removes, which is what the commit before this one is about.
+func TestACheckpointStillBoundsTheLogAfterAPowerCut(t *testing.T) {
+	disk := newSimDisk()
+	s, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("OpenWith: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	const n = 400
+	want := map[string]string{}
+	for i := range n {
+		k := fmt.Sprintf("k%03d", i)
+		v := fmt.Sprintf("v%03d", i)
+		if err := s.Put(k, []byte(v)); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+		want[k] = v
+	}
+	if s.Stats().Checkpoints == 0 {
+		t.Fatal("no checkpoint was taken, so this test is not exercising the checkpoint path")
+	}
+	live := segmentName(s.log.base)
+
+	disk.Crash()
+
+	for _, name := range disk.Names() {
+		if isSegmentName(name) && name != live {
+			t.Errorf("segment %q is back on the platter after the power cut, alongside the live %q - the unlinks that bound the log were never made durable, so the bound holds only until the machine loses power", name, live)
+		}
+	}
+
+	reopened, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening after the power cut: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	for k, v := range want {
+		if got, ok := reopened.Get(k); !ok || string(got) != v {
+			t.Fatalf("acknowledged key %q = %q, %v after the power cut; want %q, true", k, got, ok, v)
+		}
+	}
+}
+
+// B6, and the window a test could not reach until the disk could crash inside
+// one.
+//
+// checkpointLocked installs the checkpoint by renaming the temporary file over
+// the real name, and rename(2) is atomic with respect to a reader - which is a
+// different property from being durable. Until the directory is fsynced, a
+// reopening process still finds the old name. So the power is taken away at
+// the very next thing the store does, creating the segment that follows the
+// checkpoint, and the checkpoint has to be there.
+//
+// Nothing is lost either way: the ordering in checkpointLocked is built so
+// that a crash anywhere in it reverts the checkpoint and the deletions
+// together, and recovery replays the log in full. This test is not about
+// losing data. It is about the store having said it installed a checkpoint,
+// and that being true one instruction later rather than whenever the next
+// directory sync happens along.
+//
+// Delete the `fsys.syncDir()` after the rename in writeCheckpoint and this
+// fails: recovery finds no checkpoint at all.
+func TestTheCheckpointIsDurableAsSoonAsItIsInstalled(t *testing.T) {
+	disk := newSimDisk()
+	s, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("OpenWith: %v", err)
+	}
+
+	// The store has already created the segment it opened with, so the next
+	// create is the segment that follows its FIRST checkpoint. The power goes
+	// as that call returns - after the checkpoint was installed, before
+	// anything else has synced the directory, and before this store has ever
+	// had a durable checkpoint to fall back to.
+	disk.CrashAtNth("create", 1)
+
+	acked := map[string]string{}
+	op, cut := runUntilPowerCut(t, func() {
+		for i := range 400 {
+			k := fmt.Sprintf("k%03d", i)
+			v := fmt.Sprintf("v%03d", i)
+			if err := s.Put(k, []byte(v)); err != nil {
+				t.Errorf("Put(%s): %v", k, err)
+				return
+			}
+			acked[k] = v
+		}
+	})
+	if !cut {
+		t.Fatal("the store never created a second segment, so it never checkpointed and this test is not exercising the window it is named for")
+	}
+	if op != "create" {
+		t.Fatalf("the power went at %q, want create", op)
+	}
+
+	reopened, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening after the power cut: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	r := reopened.Recovery()
+	if !r.UsedCheckpoint {
+		t.Errorf("recovery found no checkpoint after the power cut (rejected=%v) - the store had installed one by renaming over the real name, and that rename was never made durable, so the platter still holds the directory as it was before it", r.CheckpointRejected)
+	}
+	if r.CheckpointSeq == 0 && r.UsedCheckpoint {
+		t.Error("recovery used a checkpoint covering sequence 0, which is no checkpoint at all")
+	}
+	for k, v := range acked {
+		if got, ok := reopened.Get(k); !ok || string(got) != v {
+			t.Errorf("acknowledged key %q = %q, %v after the power cut; want %q, true", k, got, ok, v)
+		}
+	}
+}
