@@ -240,7 +240,9 @@ func TestKillPointsAreSpread(t *testing.T) {
 // kill point in acknowledgements, but it cannot fix the instruction the signal
 // lands on - that belongs to the scheduler, and it is the whole reason the
 // test is worth running. Measured on the author's machine, a failing seed of
-// the broken build fails again on roughly half its re-runs.
+// the broken build fails again on roughly half its re-runs. The detection rate
+// across the corpus is platform-dependent for the same reason: 13 of 24 on
+// windows/amd64, 4 of 24 on ubuntu-latest, same seeds, same broken build.
 //
 // Replaying a preserved crash IS exact. When a seed fails, the harness copies
 // the directory the dead process left behind; replaying those bytes reproduces
@@ -281,8 +283,30 @@ func TestSeedReproducesFailure(t *testing.T) {
 	}
 	t.Logf("the deliberately broken build was caught on %d of %d seeds", caught, tried)
 
-	if caught < 6 {
-		t.Fatalf("the broken build was caught on only %d of %d seeds. Either the harness is not checking what it claims, or -tags kvearlyack no longer breaks anything - and both make every green run in this file meaningless", caught, tried)
+	// This floor used to be 6, chosen as an anti-flake margin under a measured
+	// rate of 13 of 24 on windows/amd64. The first CI run on ubuntu-latest
+	// caught the same broken build on the same seeds 4 times, and failed here.
+	//
+	// The guard was right to fire and the number was wrong. Detection by
+	// process kill depends on where the signal lands relative to the broken
+	// build's 4KB buffer flush, which is the scheduler's business; a rate that
+	// moves by a factor of three between platforms is not a property of this
+	// store and nothing should be asserted against it. Picking a second number
+	// that happens to fit both platforms would be fitting a threshold to two
+	// observations and calling it a law.
+	//
+	// So the rate is reported and not asserted, and what is asserted is what
+	// this test structurally needs: the corpus caught the broken build at
+	// least once, so there is a real failure below to replay. Zero would still
+	// be a hard failure, and it is the case that actually means something -
+	// a corpus that never catches a store which loses data is proving nothing.
+	//
+	// The load-bearing negative control is no longer this one. It is
+	// TestTheBrokenBuildFailsThePowerCutTest in the root package, which
+	// catches the same broken build deterministically, on every platform,
+	// because the simulated disk does not depend on when a signal arrives.
+	if caught < 1 {
+		t.Fatalf("the broken build was caught on none of %d seeds. Either the harness is not checking what it claims, or -tags kvearlyack no longer breaks anything - and both make every green run in this file meaningless", tried)
 	}
 	t.Logf("first failing seed %d: %s", first.Seed, first)
 	t.Logf("re-run that seed:  go run -tags kvearlyack ./crashtest/cmd/crashrepro -seed %d", first.Seed)

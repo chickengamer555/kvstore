@@ -23,9 +23,13 @@
 // It does NOT prove the fsync is doing its job. After Process.Kill the page
 // cache is untouched and the kernel writes out unsynced data anyway, so a store
 // that never called fsync at all would sail through this corpus. Only losing
-// power catches that, and nothing in user space can arrange it. The fsync
-// ordering is proven by the trace assertion in the main package's
-// TestFsyncPrecedesAck, and beyond that by reading the code.
+// power catches that, and nothing in user space can arrange a real one. That
+// half is proven by the simulated-disk tests in the root package, which
+// replace the platter rather than the process: writes are only durable once
+// Sync has promoted them, the power is taken away in-process, and the store is
+// reopened on what is left. The two are complementary and neither covers the
+// other - a process kill reaches code paths no simulator models, and a
+// simulated power cut reaches losses no process kill can produce.
 package crashtest
 
 import (
