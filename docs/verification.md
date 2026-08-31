@@ -162,11 +162,37 @@ addresses a wedged pipe, because there was not one.
 
 The watchdog said `produced no output for 1m0s`. That sentence was taken as
 evidence for the sentences underneath it, and the artefact that falsifies it was
-sitting in CI, one `gh run view` away, for two days. Every later claim was
+sitting in CI, one `gh run view` away, the whole time. Every later claim was
 downstream of the first: no output means the child stopped, a child that stopped
 whose parent never returned means a pipe that never closed, and a pipe that
 never closed means a wedge. Three inferences, each reasonable given the one
 above it, none checked against the dump.
+
+**How long it stood, computed rather than remembered.** The first version of
+this section said "two days", and that was the third unchecked number in this
+paragraph's short life: `3a1d3f7` had retracted "took a day to diagnose" one
+commit before the wrong account went into the README, and then a larger
+unchecked number went in beside it. Two days is also the flattering version - a
+wrong account surviving two days is a better anecdote than one that survived
+under an hour - which is the direction an unmeasured number drifts.
+
+```sh
+gh run view 33374624703 --repo chickengamer555/kvstore --json createdAt,updatedAt
+git log -1 --format='%ad' --date=iso 318059e b58c076 a4b7b9e 9267405
+```
+
+| moment | when (NZST) | since the run went red |
+|---|---|---|
+| run 33374624703 finished red | 2026-08-31 21:10 | - |
+| the wrong account first appears, in `drain()`'s comment (`318059e`) | 2026-08-31 23:55 | 2h45m |
+| it reaches the README (`b58c076`) | 2026-09-01 01:02 | 3h52m |
+| retracted in all four places (`a4b7b9e`) | 2026-09-01 01:51 | 4h41m |
+| last residual sentence removed (`9267405`) | 2026-09-01 02:27 | 5h17m |
+
+So: 49 minutes in the README, 1h56m in the code comment where it started. Not
+two days. The README carries the three SHAs rather than any of these numbers,
+because a SHA pair is checkable by anyone with the repository and a number is
+only checkable by someone who already doubts it.
 
 This is the same shape as the `v0.1.1` retraction and the premise sweep, one
 level up: a diagnostic that reported one thing and named another, believed

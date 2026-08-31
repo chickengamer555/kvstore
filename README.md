@@ -19,8 +19,11 @@ reality. What happened next is in [docs/verification.md](docs/verification.md);
 the number came down and the concession is written next to it.
 
 Run [33374624703](https://github.com/chickengamer555/kvstore/actions/runs/33374624703)
-went red on `windows-latest`, and this repository then described it wrongly, in
-four places, for two days. **Nothing wedged and nothing deadlocked.** 186 of 240
+went red on `windows-latest`, and this repository then described it wrongly in
+four places: first in a code comment at `318059e`, then on this page at
+`b58c076`, retracted at `a4b7b9e`. Those three SHAs are the duration, because a
+bare number here would be the third unchecked one in a row.
+**Nothing wedged and nothing deadlocked.** 186 of 240
 seeds finished, two failed by name, two were still running and fifty had not
 started when `go test`'s twenty-minute alarm arrived. The runner was slow - the
 root package takes 3.260s on `ubuntu-latest` and 166.127s on `windows-latest` in
