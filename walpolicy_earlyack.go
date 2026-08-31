@@ -33,11 +33,11 @@ const ackAfterSync = false
 const earlyAckFlushBytes = 4 << 10
 
 func (w *wal) commit(enc []byte) (int, error) {
+	// DELIBERATELY MADE HONEST for this commit: the buffering is gone and this
+	// build now writes and syncs like the real one. It is restored in the next
+	// commit. The point is to check that the tests which exist to catch a
+	// broken negative control actually notice when it stops being broken.
 	w.pending = append(w.pending, enc...)
-	if len(w.pending) < earlyAckFlushBytes {
-		// Acknowledged. Nothing has reached the kernel. This is the bug.
-		return len(enc), nil
-	}
 	if err := w.flushPending(); err != nil {
 		return len(enc), err
 	}

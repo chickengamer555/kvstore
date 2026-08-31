@@ -1,6 +1,7 @@
 package crashtest_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -331,6 +332,21 @@ func buildBrokenChild(t *testing.T) crashtest.Child {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatalf("BLOCKED: no go toolchain on PATH, so the deliberately broken build could not be compiled and the negative control did not run: %v", err)
+	}
+
+	// Read the broken build's source, and not decoratively. walpolicy_earlyack.go
+	// is excluded from this test binary by its build tag, so it is not one of
+	// this package's inputs, so `go test` will serve a cached PASS for this
+	// package after that file has changed. I hit exactly that: the negative
+	// control was disarmed by hand and `go test ./...` reported green from the
+	// cache. Opening the file registers it as an input, which is the only way a
+	// test that shells out to a differently tagged build re-runs when it should.
+	src, err := os.ReadFile(filepath.Join("..", "walpolicy_earlyack.go"))
+	if err != nil {
+		t.Fatalf("reading the deliberately broken build: %v", err)
+	}
+	if !bytes.Contains(src, []byte("//go:build kvearlyack")) {
+		t.Fatalf("walpolicy_earlyack.go is not the kvearlyack build any more")
 	}
 	out := filepath.Join(t.TempDir(), "crashchild-earlyack"+exeSuffix())
 	cmd := exec.Command(goBin, "build", "-tags", "kvearlyack", "-o", out, "github.com/chickengamer555/kvstore/crashtest/cmd/crashrepro")

@@ -172,8 +172,8 @@
       "case": "seed-reproduces-failure",
       "key": "crash-harness/seed-reproduces-failure",
       "matched_test": "TestSeedReproducesFailure",
-      "failed_at": "2026-08-31T02:28:48.609Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "failed_at": "2026-08-31T04:27:41.138Z",
+      "contract_hash": "2451ca624050e3f4655356a734649de6f3fbce60b1083401a6ab55a32f5f2d15",
       "gate_command": "go test ./...",
       "confidence": "exact"
     },
@@ -240,6 +240,17 @@
       "matched_test": "TestANewSegmentsDirectoryEntryIsMadeDurable",
       "failed_at": "2026-08-31T04:15:30.599Z",
       "contract_hash": "a7aaff3e9c0eb77099eea2ce94b530040bde034a61e01c292fd32ee5a2fe72d0",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "broken-build-fails-the-power-cut-test",
+      "key": "simulated-disk/broken-build-fails-the-power-cut-test",
+      "matched_test": "TestTheBrokenBuildFailsThePowerCutTest",
+      "failed_at": "2026-08-31T04:27:41.138Z",
+      "contract_hash": "2451ca624050e3f4655356a734649de6f3fbce60b1083401a6ab55a32f5f2d15",
       "gate_command": "go test ./...",
       "confidence": "exact"
     }

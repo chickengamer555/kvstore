@@ -3,6 +3,7 @@ package kvstore
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -427,6 +428,21 @@ func TestTheBrokenBuildFailsThePowerCutTest(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatalf("BLOCKED: no go toolchain on PATH, so the deliberately broken build could not be compiled and the negative control did not run: %v", err)
+	}
+
+	// Read the broken build's source, and not for show. walpolicy_earlyack.go
+	// is excluded from this build by its tag, so it is not one of this test
+	// binary's inputs - and `go test` will happily serve a cached PASS for this
+	// package after that file has changed. I found that the hard way: the
+	// suite reported green with the negative control disarmed. Opening the
+	// file here registers it with the test cache, which is the only way a test
+	// that shells out to a differently tagged build can be trusted to re-run.
+	src, err := os.ReadFile("walpolicy_earlyack.go")
+	if err != nil {
+		t.Fatalf("reading the deliberately broken build: %v", err)
+	}
+	if !bytes.Contains(src, []byte("//go:build kvearlyack")) {
+		t.Fatalf("walpolicy_earlyack.go is not the kvearlyack build any more")
 	}
 
 	// The child runs one named test, so it never re-enters this one.
