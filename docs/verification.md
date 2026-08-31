@@ -353,7 +353,8 @@ The stronger version of that evidence is in the git history rather than in the
 JSON, because a file the author's own tooling wrote is weaker proof than a build
 a stranger can check out and run. Several commits are deliberately broken and
 are labelled `(red)` in their subject: the log's fsync deleted, the directory's
-fsync deleted, the torn-tail truncation deleted, the negative control disarmed,
+fsync deleted, the torn tail appended past rather than written over, the
+negative control disarmed,
 the honest write path replaced with the buffering one so the crash corpus can be
 watched catching a store that really loses data, and one that is a genuine
 failing test rather than a staged break - the commit where a store that could
