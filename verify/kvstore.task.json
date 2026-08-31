@@ -72,7 +72,9 @@
       "tests": "recover_test.go",
       "cases": [
         { "id": "replay-is-byte-identical", "description": "two replays of one directory serialise to identical bytes", "probe": true, "maps_to_clause": "B4" },
-        { "id": "snapshot-order-independent-of-insert-order", "description": "two stores with the same final contents written in different orders serialise identically", "maps_to_clause": "B4" }
+        { "id": "snapshot-order-independent-of-insert-order", "description": "two stores with the same final contents written in different orders serialise identically", "maps_to_clause": "B4" },
+        { "id": "gap-between-segments-stops-recovery", "test_name": "TestRecoveryRefusesToServeRecordsPastAMissingSegment", "probe": true, "description": "a directory holding a segment based at 0 and a segment based at 20 with the one based at 10 missing: recovery must stop at the hole and serve the records before it, never the records past it. Every segment starts its own checksum chain, so nothing inside the later segment is detectably wrong - the only evidence the missing records existed is that the second segment does not begin where the first one ended. This is the premise docs/verification.md leans on to downgrade the superseded-record skip, and it was untested until now", "maps_to_clause": "B1" },
+        { "id": "log-starting-past-the-checkpoint-is-refused", "test_name": "TestRecoveryRefusesToOpenWhenTheLogStartsPastTheCheckpoint", "probe": true, "description": "the oldest surviving segment begins after the sequence the checkpoint covers, so records in between are in neither file and no later comparison can detect it. Open must return an error rather than a store that is quietly missing writes", "maps_to_clause": "B1" }
       ]
     },
     {
