@@ -150,3 +150,36 @@ func TestSnapshotOrderIndependentOfInsertOrder(t *testing.T) {
 		t.Fatalf("same contents, different insert order, different bytes:\n  %x\n  %x", a, b)
 	}
 }
+
+// The serialised form has to survive a round trip, and - because the same
+// codec decodes checkpoint files, which a crash can leave half written - it
+// has to reject a truncated buffer rather than returning whatever it managed
+// to read.
+func TestStateRoundTripsAndRejectsTruncation(t *testing.T) {
+	original := map[string][]byte{
+		"":         []byte("empty key"),
+		"alpha":    nil,
+		"bravo":    []byte("two"),
+		"\x00\x01": []byte{0xff, 0x00, 0x7f},
+	}
+	enc := encodeState(original)
+
+	got, err := decodeState(enc)
+	if err != nil {
+		t.Fatalf("decodeState of a freshly encoded state: %v", err)
+	}
+	if len(got) != len(original) {
+		t.Fatalf("round trip produced %d keys, want %d", len(got), len(original))
+	}
+	for k, v := range original {
+		if !bytes.Equal(got[k], v) {
+			t.Errorf("key %q round tripped to %q, want %q", k, got[k], v)
+		}
+	}
+
+	for _, cut := range []int{1, len(enc) / 2, len(enc) - 1} {
+		if _, err := decodeState(enc[:cut]); err == nil {
+			t.Errorf("decodeState accepted a buffer truncated to %d of %d bytes", cut, len(enc))
+		}
+	}
+}

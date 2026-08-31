@@ -248,7 +248,14 @@ func (s *Store) Close() error {
 	return s.log.close()
 }
 
-// Snapshot returns a deterministic serialisation of the live key set.
+// Snapshot returns a deterministic serialisation of the live key set: the same
+// contents always produce the same bytes, whatever order they were written in
+// and whatever the map's iteration order happens to be this run.
 //
-// Not implemented yet - recover_test.go says what it has to do.
-func (s *Store) Snapshot() []byte { return nil }
+// It is what clause B4 is compared with, and it is the payload a checkpoint
+// writes. See state.go for the format.
+func (s *Store) Snapshot() []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return encodeState(s.data)
+}
