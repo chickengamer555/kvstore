@@ -841,3 +841,132 @@ safety property. An argument nobody wrote down cannot appear in it, and neither
 can a premise stated so vaguely that breaking it has no definite meaning. The
 honest position is the same one the section above ends on: this is a longer list
 than it was, and it is still not the complete list.
+
+### When a gap earns a test and when it earns a paragraph
+
+A reviewer reversed the unlink loop in `checkpointLocked` to newest-first, left
+the `listSegments` sort alone, and ran everything. The root suite and all 240
+corpus seeds stayed green, while three comments in this repository argue from
+that order. The sweep above had already found the same hole, written down the
+remedy, and shipped it open - so the question back was the right one: what is
+the rule for when a known, named, load-bearing gap earns a test rather than a
+paragraph?
+
+There was no rule. There is one now, and it is four questions in order.
+
+1. **Can the store itself produce the falsifying state, through its own API and
+   its own seams?** Then it is a test, and it is owed immediately. No
+   exceptions, and no "recorded rather than quietly true" - a state the code can
+   reach with nothing checking it is an untested branch with a paragraph in
+   front of it.
+2. **Can the state be built by hand, because the on-disk format admits it even
+   though the code does not currently produce it?** Then it is a *pinned
+   limitation*: a test that records what happens today, named and commented so
+   it reads as a record and not as a requirement, saying what would make it
+   obsolete. `TestAStoppedReplayNeverReAppliesSupersededRecords` and
+   `TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites` are both this.
+3. **Could the model be extended so that (1) becomes true?** Then the extension
+   is the work, and the gap is a level-1 gap with a price attached - not a
+   level-3 one. **This is the level that catches the mistakes**, because from
+   inside the model it is indistinguishable from level 4: the answer comes back
+   as "nothing here can break it", which sounds like a fact about the store and
+   is a fact about the harness.
+4. **Is the falsifying state outside anything this repository can model at
+   all** - a property of ext4's journal, or of NTFS's `$LogFile`? Then it is a
+   paragraph, and the paragraph owes the reader the experiment that would settle
+   it and the admission that it has not been run.
+
+And a promotion: any premise that a *retraction* on this page leans on moves up
+one level. A retraction is the strongest claim this document makes, and one
+resting on an unexamined premise is worth less than it reads as - which the
+`v0.1.1` section now says about itself.
+
+**Where the unlink order was filed, and why that was wrong.** At level 2:
+hand-built directory, the store does not produce it. That was true of the
+directory and false of the gap. The real position was level 3. A crash part way
+through the unlink loop reverts *every* unlink at once on the simulated disk,
+because nothing there is durable until `syncDir`, so both orders leave all three
+segments and both recover identically. The order had no observable consequence
+**in the model**, and the conclusion drawn was that it had none in the store.
+
+The extension was twenty lines. `PromoteUnlinksEarly` makes removes durable as
+they are issued, which is a legal filesystem behaviour the default model cannot
+express - a directory block can be written back whenever the kernel likes. With
+it, `TestAPowerCutPartWayThroughTheUnlinksKeepsTheCounterLevelWithTheCheckpoint`
+reaches the state from the store's own API and two power cuts, nothing by hand,
+and the reversal costs an acknowledged write. The default stays as it was,
+because every other test on that disk is asking the durability question, where
+assuming less is the correct assumption.
+
+**Applying the rule to the rest of the table.**
+
+| row | level | what happened |
+|---|---|---|
+| `checkpointLocked` unlinks oldest first | **1**, was filed 2 | closed this turn, above |
+| `OpenWith` deletes segments recovery cannot reach | **2** | pinned this turn. Found by the mutation sweep below, not by reading |
+| one post-rename directory fsync is sufficient (ext4) | **3 or 4, and I do not know which** | the reason given was "the simulated disk promotes every pending directory entry at once", which by rule 3 is a statement about the disk. The extension would be per-entry early promotion of creates and renames, and `PromoteUnlinksEarly` is a third of it. Whether that is *enough* is unproven: this model has no metadata journal at all, and ext4's guarantee is a journal-ordering property. I have not tried, and the row now says which of the two it is: unknown |
+| no directory fsync is needed on Windows (NTFS) | **4** | outside this model entirely, and with no citation either. The experiment that would settle it is a crash corpus on NTFS with the directory sync removed, on hardware that can actually lose power. It has not been run, `syncdir_windows.go` carries the hedge, and `dirSyncNote` prints it into the Windows CI log on every push |
+| a whole segment lifted at a matching base is accepted | **2** | already pinned, with its own test |
+| the `maxPayload` ceiling | **1** | closed at `4a13a3e`, and the mutation sweep confirms it |
+| the crash corpus cannot catch a missing fsync | measured | 13 of 24 seeds on Windows, 4 of 24 on Linux, 0 for a build with no fsync at all |
+
+`Supervision.Ceiling()` in the crash harness is a **level 3** gap filed this
+turn rather than closed. It called itself "the longest one seed can take before
+the harness gives up on it" and it bounds the phase before `verify`, which has
+no clock on it at all - a `copyDir`, two `Open` calls that each replay the whole
+log, and a snapshot comparison. Bounding it means giving `verify` a deadline it
+can be told about, which is the same shape of model extension as the one above.
+Until that exists the comment says what it bounds instead of what it does not,
+and the caller that uses it to decide whether to start another seed says so too.
+
+### The mutation sweep, and how many gaps are left
+
+The second half of the reviewer's question was the harder one: how many gaps
+remain that the reading sweep's own method cannot see, and how would I go
+looking without a reviewer handing me one?
+
+The reading sweep collects every *X is safe because Y* and breaks each `Y`. It
+cannot see a line whose argument nobody wrote down, and it cannot see a line
+whose argument is perfectly true and untested anyway. The unlink order was the
+second kind. The method that does not depend on reading is to break lines
+mechanically and see whether anything goes red - which is what the reviewer did
+by hand, once.
+
+`verify/mutants.sh` is that, eight times, committed before it was run so the
+results are what it produced rather than what I wanted it to produce:
+
+```
+$ bash verify/mutants.sh
+1  checkpoint.go  unlink newest first instead of oldest first          CAUGHT
+2  checkpoint.go  do not sync the directory after the unlinks          CAUGHT
+3  recover.go     open anyway when the log starts past the checkpoint  CAUGHT
+4  recover.go     do not require segments to abut                      CAUGHT
+5  recover.go     re-apply superseded records instead of skipping them CAUGHT
+6  recover.go     keep the segments past the point replay stopped      CAUGHT
+7  record.go      accept a length field the record cannot contain      CAUGHT
+8  wal.go         acknowledge before the fsync rather than after it    SKIP
+```
+
+Number 6 survived the first run - the whole root suite, and separately all 240
+corpus seeds, 156 seconds. It is caught now, and the reason it survived is the
+finding: the shipped store never produces a directory where that deletion has
+anything to delete, because replay stops at a torn tail in the *last* segment
+and there is nothing above the last segment. Number 8 is skipped rather than
+run, because an ack-before-fsync mutant would be a second copy of
+`walpolicy_earlyack.go`, a control that lives in the tree instead of being
+reconstructed by `sed`.
+
+**What this does not establish.** Eight hand-written mutations are not mutation
+coverage. A real mutation tester enumerates every mutable token; this enumerates
+the ones someone thought of, which is the reading sweep's limitation one step
+further out. It runs the root package only, because the corpus is 150 seconds a
+run and a twenty-minute script is a script nobody runs - so a survivor has to be
+re-run against `./crashtest/` by hand before it is believed, which is what
+happened to number 6.
+
+So the honest answer to "how many are left" is that I cannot give a number, and
+a number for a repository this size would be a guess dressed as a measurement.
+What I can say is what the search costs: the reading sweep found three in a
+pass, the mutation sweep found one in eight, and both are cheap enough to run
+again. The question worth tracking is not how many remain but whether the rate
+is falling, and two passes is not enough data to say.
