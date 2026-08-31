@@ -225,11 +225,12 @@ Deliberate, and none of them are on a roadmap.
   store at a matching boundary is accepted, and there is a test that does it
   and records the result.
 - **The oracle and the implementation have the same author.** A model check
-  catches divergence from my understanding of correctness, not from a
+  catches divergence from the author's understanding of correctness, not from a
   specification - weaker evidence than an external suite like `toml-test`, and
   no number of seeds fixes it.
-- **The simulated disk is a model, and I wrote it.** What it does not model is
-  three specific things, listed at the top of `simdisk_test.go`.
+- **The simulated disk is a model, not a disk**, written by the same author as
+  the store it judges. What it does not model is three specific things, listed
+  at the top of `simdisk_test.go`.
 
 ## Licence
 
