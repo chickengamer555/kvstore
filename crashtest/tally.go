@@ -20,8 +20,8 @@ import (
 //
 // That is the shape this repository keeps finding in itself: a 32-bit CI step
 // green over an input nothing reaches, a corpus reporting zero torn records
-// without saying whether it could produce one, a wedged seed counted in a
-// total. The rule those three add up to is in docs/verification.md; this type
+// without saying whether it could produce one, a seed the harness gave up on
+// counted in a total. The rule those three add up to is in docs/verification.md; this type
 // is the mechanical part of it for the corpus.
 //
 // It reconciles SETS, not totals. Every seed in the corpus must be accounted
