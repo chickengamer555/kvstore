@@ -1,0 +1,13 @@
+# Build output
+/kvbench
+/kvbench.exe
+/crashchild
+/crashchild.exe
+
+# Go test/coverage artefacts
+*.out
+*.test
+*.test.exe
+
+# Scratch stores written by hand while poking at things
+/scratch/
