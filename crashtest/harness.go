@@ -108,10 +108,26 @@ func (s Supervision) withDefaults() Supervision {
 	return s
 }
 
-// Ceiling is the longest one seed can take before the harness gives up on it:
-// the wall-clock bound, plus the two drain waits that follow a kill. A caller
-// with a deadline of its own uses this to decide whether there is room to start
-// another seed - see the corpus reconciliation in crash_test.go.
+// Ceiling is what the supervision above bounds: the wall clock on the child,
+// plus the two drain waits that follow the kill. A caller with a deadline of
+// its own uses it to decide whether there is room to start another seed - see
+// the corpus reconciliation in crash_test.go.
+//
+// It is NOT the longest a seed can take, and it used to say that it was. RunSeed
+// is runAndKill followed by verify, and verify has no clock on it at all: a
+// copyDir of the crashed directory, two Opens that each replay the whole log,
+// and a snapshot comparison, on the platform where filesystem work is fifty
+// times its Linux twin. So a seed started with exactly Ceiling remaining can
+// still be inside verify when the package alarm fires, and then the parent's
+// t.Cleanup never runs and the reconciliation that would have named it is never
+// printed. That is the one path by which a seed can still go missing without
+// appearing anywhere, and it is open.
+//
+// The margin is small - the red run's own numbers put a seed at about eleven
+// seconds against a three-minute wall bound - so this is a hole in a guarantee
+// rather than a live fire. Closing it means giving verify a deadline it can be
+// told about. Until then the word "guarantee" does not belong near this, and
+// the caller adds its own margin instead of trusting one that is not here.
 func (s Supervision) Ceiling() time.Duration {
 	s = s.withDefaults()
 	return s.Wall + 2*s.Drain

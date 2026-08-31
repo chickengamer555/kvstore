@@ -101,6 +101,23 @@ func TestCorpusSizeFloor(t *testing.T) {
 	}
 }
 
+// verifyAllowance is the share of a seed's budget set aside for verify, which
+// nothing bounds.
+//
+// It is chosen, not derived, and the basis is the only measurement available:
+// run 33374624703 finished 186 seeds in 1200 seconds at parallelism 2 on
+// windows-latest, the slowest runner this has been observed on, which is about
+// 13 seconds for a whole seed - child, kill, copy, two replays and the
+// comparison together. Thirty seconds is more than twice that for the verify
+// part alone.
+//
+// A margin is not a bound and this one is not load-bearing in the way Ceiling
+// pretended to be: if verify overruns it, the seed is still inside the package
+// alarm and still goes unreported. It buys headroom, and it is here rather than
+// folded into Ceiling so that the thing Ceiling does not cover is visible at
+// the call site instead of hidden in a sum.
+const verifyAllowance = 30 * time.Second
+
 // B5, and through it B1, B3 and B4. Every seed forks a child, kills it at a
 // randomised offset and checks the wreckage.
 //
@@ -138,10 +155,16 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 	// the harness, so the deadline is checked here instead - and what would have
 	// been a timeout that names nothing becomes a reconciliation that names
 	// every seed it did not reach.
-	ceiling := crashtest.DefaultSupervision().Ceiling()
+	//
+	// Ceiling bounds the supervised phase and NOT verify, which has no clock on
+	// it - see its doc comment. So the margin here is Ceiling plus a share for
+	// verify, chosen rather than derived, and it is written as a sum so that
+	// nobody reads it as a guarantee it is not.
+	ceiling := crashtest.DefaultSupervision().Ceiling() + verifyAllowance
 	if deadline, ok := t.Deadline(); ok {
-		t.Logf("package deadline in %s; a seed is not started with less than %s left, which is the longest the harness can spend on one",
-			time.Until(deadline).Round(time.Second), ceiling)
+		t.Logf("package deadline in %s; a seed is not started with less than %s left - %s of supervised child, plus %s for the unbounded verify",
+			time.Until(deadline).Round(time.Second), ceiling,
+			crashtest.DefaultSupervision().Ceiling(), verifyAllowance)
 	}
 
 	for _, seed := range seeds {
@@ -155,7 +178,7 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 					// it as attempted - a report reading "0 never attempted"
 					// above a reason that begins "never attempted" is the
 					// exact defect this whole mechanism is about.
-					t.Logf("not started: %s left before the package deadline, less than the %s one seed can take",
+					t.Logf("not started: %s left before the package deadline, less than the %s budgeted for one seed",
 						left.Round(time.Second), ceiling)
 					return
 				}
