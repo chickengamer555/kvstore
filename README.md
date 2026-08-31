@@ -19,8 +19,8 @@ reality. What happened next is in [docs/verification.md](docs/verification.md);
 the number came down and the concession is written next to it.
 
 Run [33374624703](https://github.com/chickengamer555/kvstore/actions/runs/33374624703)
-took a day to diagnose and the cause was in the crash harness, not in the store.
-On `windows-latest`, two children were killed as designed and the goroutine
+was read as flake and pushed past before it was diagnosed, and the cause was in
+the crash harness rather than in the store. On `windows-latest`, two children were killed as designed and the goroutine
 reading their output never saw the pipe close, so those seeds neither passed nor
 failed - they wedged, the package hit its twenty-minute limit, and what came out
 was a goroutine dump naming nothing. The harness's own message made it worse: it
