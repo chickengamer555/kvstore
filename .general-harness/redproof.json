@@ -44,6 +44,50 @@
       "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "durability",
+      "case": "acked-write-survives-immediate-kill",
+      "key": "durability/acked-write-survives-immediate-kill",
+      "matched_test": "TestAckedWriteSurvivesImmediateKill",
+      "failed_at": "2026-08-31T02:09:24.704Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "durability",
+      "case": "unacked-write-may-vanish",
+      "key": "durability/unacked-write-may-vanish",
+      "matched_test": "TestUnackedWriteMayVanish",
+      "failed_at": "2026-08-31T02:09:24.704Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "durability",
+      "case": "fsync-precedes-ack",
+      "key": "durability/fsync-precedes-ack",
+      "matched_test": "TestFsyncPrecedesAck",
+      "failed_at": "2026-08-31T02:09:24.704Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "durability",
+      "case": "dir-fsync-on-log-create",
+      "key": "durability/dir-fsync-on-log-create",
+      "matched_test": "TestDirFsyncOnLogCreate",
+      "failed_at": "2026-08-31T02:09:24.704Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
