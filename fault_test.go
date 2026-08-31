@@ -244,3 +244,107 @@ func TestCreatingAFileThatAlreadyExistsFails(t *testing.T) {
 		t.Errorf("create failed with %v, want os.ErrExist", err)
 	}
 }
+
+// B1, B6. A segment that stopped accepting writes is not a store that is over.
+//
+// The refusal introduced with w.failed is only half a guarantee. It stops the
+// store handing out promises it has already lost the ability to keep, and it
+// leaves the log with a tail recovery cannot vouch for - so the other half is
+// that reopening clears it. The torn tail is truncated away, every record
+// acknowledged before it is still there, and the next write lands somewhere
+// recovery can reach. Nothing checked any of that: the previous turn asserted
+// it in a field comment and in a commit body and left it at that, which is the
+// difference between a claim and a check.
+//
+// The last assertion is the one that matters. Delete the truncation in
+// reopenSegment and "e" is written past the ten bytes the short write left
+// behind - written, fsynced, acknowledged, and then gone after the power cut,
+// because recovery stops at the tear in front of it.
+func TestAStoreWhoseSegmentFailedReopensAndResumes(t *testing.T) {
+	disk := newSimDisk()
+	s := openSim(t, disk)
+
+	acked := map[string][]byte{}
+	put := func(st *Store, k, v string) {
+		t.Helper()
+		if err := st.Put(k, []byte(v)); err == nil {
+			acked[k] = []byte(v)
+		}
+	}
+
+	put(s, "a", "one")
+	put(s, "b", "two")
+	if len(acked) != 2 {
+		t.Fatal("a Put failed before anything was injected")
+	}
+
+	seg, err := findSimSegment(disk)
+	if err != nil {
+		t.Fatalf("locating the log segment: %v", err)
+	}
+	// Ten bytes of a two-hundred-byte record: a header cut in half, which is
+	// the tail recovery has to refuse and then cut away.
+	disk.FailNext(seg, "writeat", 10, io.ErrShortWrite)
+
+	if err := s.Put("c", []byte(strings.Repeat("c", 200))); err == nil {
+		t.Fatal("Put returned nil over a short write - only part of the record reached the file")
+	}
+	if err := s.Put("d", []byte("four")); err == nil {
+		t.Fatal("Put returned nil on a segment whose commit had already failed - that record would be written beyond the point recovery stops at, and acknowledging it promises data that can never be read back")
+	}
+
+	// A caller that ignored the error from Put hears about it here or nowhere.
+	if err := s.Close(); err == nil {
+		t.Error("Close returned nil on a segment whose last commit did not complete")
+	} else if !errors.Is(err, io.ErrShortWrite) {
+		t.Errorf("Close reported %v, want the write's own error wrapped", err)
+	}
+
+	reopened, err := OpenWith(Options{Dir: "sim", fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening a store whose segment had failed: %v - a tail that could not be vouched for is the shape recovery exists to handle, not a reason to refuse to open", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	for k, v := range acked {
+		if got, ok := reopened.Get(k); !ok || !bytes.Equal(got, v) {
+			t.Errorf("acknowledged key %q = %q, %v after reopening; want %q, true", k, got, ok, v)
+		}
+	}
+	for _, k := range []string{"c", "d"} {
+		if got, ok := reopened.Get(k); ok {
+			t.Errorf("Get(%s) = %q, true - that Put returned an error, so nothing it wrote may come back as data", k, got)
+		}
+	}
+
+	// And the segment holds exactly what recovery vouched for, with the
+	// unvouched-for tail cut off rather than left lying past the live end of
+	// the log. Delete the Truncate in reopenSegment and this is the assertion
+	// that notices: nothing else in the suite does, because the write offset
+	// is positional and the checksum chain refuses the stale bytes anyway.
+	live, err := disk.FS("sim").size(seg)
+	if err != nil {
+		t.Fatalf("sizing %s: %v", seg, err)
+	}
+	if live != reopened.log.bytes {
+		t.Errorf("%s is %d bytes after recovery vouched for %d - the tail it refused is still in the file, so the log carries junk past its own live end and every later reader has to re-derive that it is junk", seg, live, reopened.log.bytes)
+	}
+
+	put(reopened, "e", "five")
+	if _, ok := acked["e"]; !ok {
+		t.Fatal("the reopened store would not take a write, so a failed commit ends the store rather than the segment")
+	}
+
+	disk.Crash()
+
+	again, err := OpenWith(Options{Dir: "sim", fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening after the power cut: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Close() })
+	for k, v := range acked {
+		if got, ok := again.Get(k); !ok || !bytes.Equal(got, v) {
+			t.Errorf("acknowledged key %q = %q, %v after the power cut; want %q, true - a write taken by the reopened store has to land where recovery can still reach it, which means the tail the failed commit left had to be cut away first", k, got, ok, v)
+		}
+	}
+}
