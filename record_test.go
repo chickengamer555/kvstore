@@ -181,19 +181,87 @@ func TestSequenceBreakEndsRecovery(t *testing.T) {
 // B3. The length prefix is attacker-shaped data after a crash: it is read
 // before the checksum can be verified, because the checksum covers it. A
 // garbage length must be treated as the end of the log, never as a request to
-// allocate that many bytes.
+// allocate that many bytes and never as a slice bound.
+//
+// What this test does and does not establish, because the comment on
+// maxPayload claimed more than the code does. On a 64-bit build every one of
+// these lengths is rejected with the ceiling deleted as well as with it: the
+// `len(buf) < total` comparison one line further down rejects the same input,
+// and decodeRecord slices a buffer that has already been read rather than
+// allocating one, so there is no 3.9GB make([]byte) on this path to prevent.
+// The ceiling earns its place in two narrower ways and each has its own
+// evidence:
+//
+//   - it keeps the checksum from being computed over a length the record
+//     cannot have, which is only observable when the buffer really is that
+//     long. TestALengthPastTheCeilingStopsBeforeTheChecksum below stages that,
+//     and it fails without the ceiling on any architecture.
+//   - it is the only thing between a corrupt length and an integer overflow
+//     where int is 32 bits. That is what the last two cases here are for, and
+//     they are arch-sensitive: run `GOARCH=386 go test -count=1 .` to see them.
+//     Whether they hold depends on the ceiling comparing the on-disk uint32
+//     rather than an int converted from it.
 func TestAbsurdLengthFieldIsATornTail(t *testing.T) {
-	buf, offsets := buildLog(t, []uint64{1, 2})
+	for _, tc := range []struct {
+		name   string
+		length uint32
+	}{
+		{"one byte past the ceiling", maxPayload + 1},
+		{"most of a uint32", 0xFFFFFFF0},
+		{"the high bit set, which is a negative int where int is 32 bits", 0x80000000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, offsets := buildLog(t, []uint64{1, 2})
 
-	// Overwrite record 2's length field with something absurd. The checksum
-	// will not match either, but the length check must fire first - otherwise
-	// verifying the checksum means reading 4GB that is not there.
-	binary.LittleEndian.PutUint32(buf[offsets[1]+4:], 0xFFFFFFF0)
+			// Overwrite record 2's length field. Its checksum will not match
+			// either, but the length has to be rejected as a length: by the
+			// time the checksum is consulted the length has already been used
+			// to slice the buffer.
+			binary.LittleEndian.PutUint32(buf[offsets[1]+4:], tc.length)
+
+			got, reason, consumed := collect(buf)
+
+			if reason != stopTornRecord {
+				t.Fatalf("a record claiming a payload of %#x stopped replay for reason %q, want %q", tc.length, reason, stopTornRecord)
+			}
+			if want := []string{keyN(1)}; !equalStrings(appliedKeys(got), want) {
+				t.Fatalf("applied %v, want %v", appliedKeys(got), want)
+			}
+			if consumed != offsets[1] {
+				t.Errorf("consumed %d bytes, want %d", consumed, offsets[1])
+			}
+		})
+	}
+}
+
+// B3. The ceiling has to fire BEFORE the checksum, not merely somewhere.
+//
+// Every other length case here is rejected because the buffer is too short to
+// hold what the length claims, which is what a torn tail at the end of a
+// segment looks like and is not what a merely wrong length looks like. This
+// one hands replay a buffer that really is long enough: a seventeen-megabyte
+// payload claimed inside a buffer with seventeen megabytes in it. With the
+// ceiling gone, crc32 runs over all of it and the record is rejected as a
+// checksum mismatch instead - the same stop, one line later, after seventeen
+// megabytes of work that one comparison avoids. It is the only assertion in
+// this repository that fails when the ceiling is deleted, which is the reason
+// it exists: a reviewer deleted those three lines and the entire suite,
+// 240-seed corpus included, stayed green.
+func TestALengthPastTheCeilingStopsBeforeTheChecksum(t *testing.T) {
+	const claimed = maxPayload + 1<<20
+
+	buf, offsets := buildLog(t, []uint64{1, 2})
+	binary.LittleEndian.PutUint32(buf[offsets[1]+4:], claimed)
+	buf = append(buf, make([]byte, headerSize+claimed)...)
+
+	if len(buf)-offsets[1] < headerSize+claimed {
+		t.Fatalf("staging: %d bytes after the start of record 2, need %d - this test is only about the case where the buffer IS long enough", len(buf)-offsets[1], headerSize+claimed)
+	}
 
 	got, reason, consumed := collect(buf)
 
 	if reason != stopTornRecord {
-		t.Fatalf("stop reason %q, want %q", reason, stopTornRecord)
+		t.Fatalf("a record claiming %d bytes of payload, inside a buffer that has them, stopped replay for reason %q, want %q - the length is past the ceiling and must be rejected as impossible rather than checksummed", claimed, reason, stopTornRecord)
 	}
 	if want := []string{keyN(1)}; !equalStrings(appliedKeys(got), want) {
 		t.Fatalf("applied %v, want %v", appliedKeys(got), want)
