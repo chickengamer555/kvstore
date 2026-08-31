@@ -509,10 +509,21 @@ moved again, to `430c7b36`. The four new probes were observed failing against
 that hash and carry proofs recorded under it. The thirty-eight from the campaign
 below do not: they read as proven against the previous contract, which is what
 `general-verify` reports as *proven against an older contract* rather than as
-missing, and it is accurate. Nothing they cover changed - `git log -p` over
-`verify/kvstore.task.json` shows every edit since the campaign is additive - but
-re-establishing them means running the campaign again, and that has not been
-done. Read the table below as the record of how those proofs were obtained, not
+missing, and it is accurate. Nothing they cover changed, and here is the check rather than
+the assertion:
+
+```sh
+git diff b39ee37 HEAD -- verify/kvstore.task.json | grep '^-'
+```
+
+One deletion line, and it is a unit's `tests` field growing from
+`crashtest/crash_test.go` to that plus `crashtest/tally_test.go`. Every case
+object - id, test name, description, probe flag, clause mapping - is byte for
+byte what it was. This page previously said the diff was "additive", full stop,
+which is additive in effect and not literally what `git diff` prints, in a
+sentence whose entire job is to be literally checkable. A reviewer ran the
+command. Re-establishing the proofs means running the campaign again, and that
+has not been done. Read the table below as the record of how those proofs were obtained, not
 as their current hash.
 
 | what was broken | cases whose proof finally came from this run |

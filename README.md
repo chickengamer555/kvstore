@@ -209,16 +209,24 @@ power can go in the middle of a multi-step operation.
 | a later page durable, an earlier one a hole | `TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery` |
 | a superseded segment comes back: the unlink reverted | `TestACheckpointStillBoundsTheLogAfterAPowerCut` |
 | the installed checkpoint is not there: the rename reverted | `TestTheCheckpointIsDurableAsSoonAsItIsInstalled` |
-| fsync returns EIO; a write takes ten bytes and stops | `TestAFailedSyncNeverProducesAnAcknowledgement` |
+| fsync returns EIO | `TestAFailedSyncNeverProducesAnAcknowledgement` |
+| a write takes ten bytes and stops | `TestAShortWriteNeverProducesAnAcknowledgement` |
+| a write fails outright | `TestAFailedWriteNeverProducesAnAcknowledgement` (a guard, not a probe) |
 | a segment that stopped accepting writes, reopened | `TestAStoreWhoseSegmentFailedReopensAndResumes` |
 | a checkpoint asked for while the live segment is poisoned | `TestACheckpointNeverRotatesAwayFromAFailedSegment` |
 | the power out at each of the ten calls a checkpoint makes | `TestAPowerCutAnywhereInTheCheckpointPathLosesNothing` |
 
-All but one fail when the line they are about is removed, and those builds are
-commits here rather than claims on this page. The exception is the out-of-order
-flush, declared a guard rather than a probe in the contract, because this store
-never had a scanning recovery to break and inventing one would be manufacturing
-evidence.
+All but two fail when the line they are about is removed, and those builds are
+commits here rather than claims on this page. The two exceptions are declared
+guards rather than probes in the contract, and are marked as such above: the
+out-of-order flush, because this store never had a scanning recovery to break
+and inventing one would be manufacturing evidence, and the failed write, whose
+path is the same one the failed sync proves.
+
+That row used to be one line reading "fsync returns EIO; a write takes ten bytes
+and stops", against one test name. It is three rows now. In a table whose whole
+value is a one-to-one map from shape to test, a row naming two shapes and one
+test cannot be checked as written, and a reviewer stopped there.
 
 The simulator is not the real thing. It models a filesystem where the
 application owns directory-entry durability, which is POSIX; on Windows that
