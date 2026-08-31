@@ -69,7 +69,7 @@ under it, in ascending order of how long you have to wait:
 ```sh
 go run ./crashtest/cmd/crashrepro -seed 7960286522194355700        # one crash, ~2s
 go run -tags kvearlyack ./crashtest/cmd/crashrepro -seed 7960286522194355700
-go test -run PowerCut ./                                           # power cuts, instant
+go test -run 'SimDisk|PowerCut|Torn|OutOfOrder|DirectoryEntry' ./   # the simulated disk
 go test ./...                                                      # everything, ~3 min
 ```
 
