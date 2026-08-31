@@ -236,28 +236,28 @@ func corpusShapes(child crashtest.Child, workers int) error {
 	wg.Wait()
 
 	g := kvstore.Platform()
-	reconciliation, reconciles := tally.Reconcile(len(seeds))
+	rec := tally.Reconcile(seeds)
 
 	// The header says how many seeds were OBSERVED, not how many are in the
 	// corpus. Those have been the same number every time this has been run, and
 	// the header said so on the strength of that assumption rather than of the
 	// count - which is the same defect as the zero rows below it, one level up.
 	fmt.Printf("| | %d seeds observed of %d, %s/%s |\n|---|---|\n",
-		tally.Observations(), len(seeds), runtime.GOOS, runtime.GOARCH)
+		rec.Observed, rec.Corpus, runtime.GOOS, runtime.GOARCH)
 	for _, row := range counts.Rows() {
 		fmt.Printf("| %s | %d |\n", row.Shape, row.N)
 	}
 	fmt.Printf("| **classified** | **%d** |\n", counts.Total())
 	fmt.Printf("| recovered through a checkpoint | %d |\n", checkpointed)
 	fmt.Printf("| seeds that failed | %d |\n", failed)
-	fmt.Printf("| seeds that produced no observation | %d |\n", len(seeds)-tally.Observations())
-	fmt.Printf("\n%s\n", reconciliation)
+	fmt.Printf("| seeds that produced no observation | %d |\n", rec.Corpus-rec.Observed)
+	fmt.Printf("\n%s\n", rec)
 	fmt.Printf("\ndirectory fsync on this build: %v (%s)\n", g.DirSync, g.Platform)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d seeds failed", failed, len(seeds))
 	}
-	if !reconciles {
-		return fmt.Errorf("the corpus did not reconcile: %d observations from %d seeds", tally.Observations(), len(seeds))
+	if !rec.OK {
+		return fmt.Errorf("the corpus did not reconcile: %d observations from %d seeds", rec.Observed, rec.Corpus)
 	}
 	return nil
 }

@@ -418,6 +418,50 @@
       "contract_hash": "a7cdf51d9e0214dc046c6c677b93da393dbab8c6d8eea4a94850f0502881c15a",
       "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "unattempted-seeds-are-named-not-counted",
+      "key": "crash-harness/unattempted-seeds-are-named-not-counted",
+      "matched_test": "TestATallyNamesTheSeedsItNeverAttempted",
+      "failed_at": "2026-08-31T12:55:57.263Z",
+      "contract_hash": "7d7ef3e4312a557a49096e311183583d9cbfe0caf100080473d97aa3fff35d93",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "one-seed-cannot-stand-in-for-another",
+      "key": "crash-harness/one-seed-cannot-stand-in-for-another",
+      "matched_test": "TestATallyDoesNotReconcileWhenOneSeedStandsInForAnother",
+      "failed_at": "2026-08-31T12:55:57.263Z",
+      "contract_hash": "7d7ef3e4312a557a49096e311183583d9cbfe0caf100080473d97aa3fff35d93",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "observation-outside-the-corpus-is-refused",
+      "key": "crash-harness/observation-outside-the-corpus-is-refused",
+      "matched_test": "TestATallyRejectsAnObservationForASeedThatIsNotInTheCorpus",
+      "failed_at": "2026-08-31T12:55:57.263Z",
+      "contract_hash": "7d7ef3e4312a557a49096e311183583d9cbfe0caf100080473d97aa3fff35d93",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "the-observation-count-cannot-be-had-without-the-verdict",
+      "key": "crash-harness/the-observation-count-cannot-be-had-without-the-verdict",
+      "matched_test": "TestTheObservationCountCannotBeObtainedWithoutTheVerdict",
+      "failed_at": "2026-08-31T12:55:57.263Z",
+      "contract_hash": "7d7ef3e4312a557a49096e311183583d9cbfe0caf100080473d97aa3fff35d93",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
     }
   ]
 }

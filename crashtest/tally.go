@@ -59,31 +59,61 @@ func (t *Tally) Observations() int {
 	return t.observed
 }
 
-// Reconcile returns what to print and whether the run covered the corpus.
+// Reconciliation is the answer to "did this run cover the corpus", together
+// with every number a reader needs to check it. It is the only way to get the
+// observation count, which is the point: the count and the verdict arrive in
+// one value, so nobody prints the first without having been handed the second.
+type Reconciliation struct {
+	// Corpus is how many seeds the run was reconciled against.
+	Corpus int
+	// Observed is how many of them produced a verdict - pass or fail, both are
+	// observations.
+	Observed int
+	// Missing is the seeds that were attempted and produced nothing, with the
+	// reason for each.
+	Missing []Missing
+	// Unattempted is the seeds in the corpus that were never accounted for at
+	// all, named so they can be re-run.
+	Unattempted []uint64
+	// Repeated is the seeds accounted for more than once.
+	Repeated []uint64
+	// Unexpected is the seeds accounted for that are not in this corpus.
+	Unexpected []uint64
+	// OK is true only when every seed in the corpus produced exactly one
+	// observation and nothing else was accounted for.
+	OK bool
+}
+
+// String is the line a run prints. It states the numbers first and then, if it
+// does not reconcile, why not and which seeds.
+func (r Reconciliation) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "corpus reconciliation: %d seeds in the corpus, %d observations made, %d attempted and produced no observation, %d never attempted",
+		r.Corpus, r.Observed, len(r.Missing), r.Corpus-r.Observed-len(r.Missing))
+	if r.OK {
+		return b.String()
+	}
+	b.WriteString("\n  A seed that produced no observation is not a seed that passed: it has no findings, so it fails nothing, and the corpus is that many observations short of what this run claims.")
+	for _, m := range r.Missing {
+		fmt.Fprintf(&b, "\n  seed %d: %s", m.Seed, m.Reason)
+	}
+	return b.String()
+}
+
+// Reconcile reports whether the run covered the corpus.
 //
-// It reconciles when the number of observations matches the size of the
-// corpus and nothing was attempted without producing one. Seeds that were
-// attempted and produced nothing are named with their reasons; seeds that were
-// never started at all are counted separately, because a package deadline
-// running out is a different fact from a child wedging and the difference is
-// what a reader needs.
-func (t *Tally) Reconcile(corpus int) (string, bool) {
+// It compares the number of observations against the size of the corpus, and
+// names the seeds that were attempted and produced nothing. Seeds that were
+// never started at all are counted rather than named, because a package
+// deadline running out is a different fact from a child wedging.
+func (t *Tally) Reconcile(corpus []uint64) Reconciliation {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	missing := append([]Missing(nil), t.missing...)
 	sort.Slice(missing, func(i, j int) bool { return missing[i].Seed < missing[j].Seed })
-	unattempted := corpus - t.observed - len(missing)
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "corpus reconciliation: %d seeds in the corpus, %d observations made, %d attempted and produced no observation, %d never attempted",
-		corpus, t.observed, len(missing), unattempted)
-	if t.observed == corpus && len(missing) == 0 && unattempted == 0 {
-		return b.String(), true
-	}
-	b.WriteString("\n  A seed that produced no observation is not a seed that passed: it has no findings, so it fails nothing, and the corpus is that many observations short of what this run claims.")
-	for _, m := range missing {
-		fmt.Fprintf(&b, "\n  seed %d: %s", m.Seed, m.Reason)
-	}
-	return b.String(), false
+	rec := Reconciliation{Corpus: len(corpus), Observed: t.observed, Missing: missing}
+	rec.OK = rec.Observed == rec.Corpus && len(missing) == 0
+	return rec
 }

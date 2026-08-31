@@ -128,12 +128,12 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 
 	var tally crashtest.Tally
 	t.Cleanup(func() {
-		report, ok := tally.Reconcile(len(seeds))
-		if !ok {
-			t.Errorf("%s", report)
+		rec := tally.Reconcile(seeds)
+		if !rec.OK {
+			t.Errorf("%s", rec)
 			return
 		}
-		t.Log(report)
+		t.Log(rec)
 	})
 
 	// The other way a seed goes unobserved: the package runs out of time before
