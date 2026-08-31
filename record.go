@@ -36,11 +36,35 @@ import (
 const (
 	headerSize = 21
 
-	// A payload larger than this is treated as end-of-log rather than as an
-	// allocation request. Any suffix of the log can be garbage after a crash,
-	// and a garbage length prefix that says 3.9GB must not become a 3.9GB
-	// make([]byte). 16MiB is far above any value this store will write and far
-	// below anything that hurts.
+	// A payload larger than this is treated as end-of-log. Any suffix of the
+	// log can be garbage after a crash, and the length prefix is read before
+	// anything can vouch for it, so it is the one field that has to be
+	// defended against rather than trusted. 16MiB is far above any value this
+	// store will write and far below anything that hurts.
+	//
+	// This comment used to say the ceiling stops "a garbage length prefix that
+	// says 3.9GB" becoming "a 3.9GB make([]byte)". There is no such allocation
+	// on this path - decodeRecord slices a buffer that has already been read -
+	// and on a 64-bit build the `len(buf) < total` comparison below rejects
+	// exactly the same input on its own. A reviewer deleted this ceiling and
+	// the whole suite stayed green, which is what a line whose stated reason
+	// is not its real reason looks like. The two real reasons:
+	//
+	// It bounds the work. When the buffer IS long enough to hold what a
+	// corrupt length claims - a big segment, a length scribbled somewhere in
+	// the middle of it - `len(buf) < total` does not fire, and without the
+	// ceiling crc32 runs over every one of those bytes before the mismatch is
+	// found. TestALengthPastTheCeilingStopsBeforeTheChecksum stages that and
+	// fails without this line.
+	//
+	// It is the only thing between a corrupt length and an integer overflow
+	// where int is 32 bits. That is why the comparison below is on the uint32
+	// and not on an int converted from it: `int(0x80000000)` is negative on a
+	// 32-bit build, sails under any positive ceiling, and makes headerSize +
+	// payload negative - a negative slice bound, and a panic inside recovery
+	// on precisely the input recovery exists to survive. Observed, not
+	// theorised: `GOARCH=386 go test -count=1 .` panics at record.go:138 on
+	// the commit before this one.
 	maxPayload = 16 << 20
 )
 
@@ -126,10 +150,14 @@ func decodeRecord(buf []byte, prevCRC uint32, wantSeq uint64) (record, int, uint
 		return record{}, 0, prevCRC, errTornRecord
 	}
 	stored := binary.LittleEndian.Uint32(buf[0:])
-	payload := int(binary.LittleEndian.Uint32(buf[4:]))
-	if payload > maxPayload {
+	// Compared as the uint32 it is on disk, before any conversion to int. See
+	// maxPayload: converting first is a 32-bit overflow, and the conversion
+	// after this comparison cannot be, because the value is now bounded.
+	claimed := binary.LittleEndian.Uint32(buf[4:])
+	if claimed > maxPayload {
 		return record{}, 0, prevCRC, errTornRecord
 	}
+	payload := int(claimed)
 	total := headerSize + payload
 	if len(buf) < total {
 		return record{}, 0, prevCRC, errTornRecord
