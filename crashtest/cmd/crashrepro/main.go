@@ -22,6 +22,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
+	"sync"
 
 	"github.com/chickengamer555/kvstore"
 	"github.com/chickengamer555/kvstore/crashtest"
@@ -42,7 +45,22 @@ func main() {
 	replay := flag.String("replay", "", "re-check a crash directory preserved by a failing run: same bytes, same verdict, every time")
 	keep := flag.String("dir", "", "keep the crashed store in this directory instead of a temporary one")
 	writeCorpus := flag.String("write-corpus", "", "regenerate the seed corpus into this file and exit")
+	shapes := flag.Bool("corpus-shapes", false, "run the whole corpus and print where the kills actually landed")
+	workers := flag.Int("workers", runtime.NumCPU(), "children to run at once with -corpus-shapes")
 	flag.Parse()
+
+	if *shapes {
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := corpusShapes(crashtest.Child{Argv: []string{exe}}, *workers); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *writeCorpus != "" {
 		if err := regenerate(*writeCorpus); err != nil {
@@ -131,4 +149,101 @@ func regenerate(path string) error {
 		return err
 	}
 	return os.WriteFile(path, buf, 0o644)
+}
+
+// corpusShapes runs every seed in the recorded corpus and counts where the
+// kills actually landed.
+//
+// This exists because the README quotes that distribution, and a number in a
+// README that a reader cannot regenerate is worth less than no number. It is
+// also the honest measure of how much the corpus covers: "240 seeds" says how
+// many times the harness ran, not how many interesting places it interrupted.
+func corpusShapes(child crashtest.Child, workers int) error {
+	seeds, err := crashtest.Corpus()
+	if err != nil {
+		return err
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	var mu sync.Mutex
+	counts := map[string]int{}
+	checkpointed, failed := 0, 0
+
+	work := make(chan uint64)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for seed := range work {
+				dir, err := os.MkdirTemp("", "kvshapes-")
+				if err != nil {
+					continue
+				}
+				res, runErr := crashtest.RunSeed(child, seed, dir)
+				mu.Lock()
+				switch {
+				case runErr != nil:
+					counts["harness error"]++
+				default:
+					counts[shape(res)]++
+					if res.Report.UsedCheckpoint {
+						checkpointed++
+					}
+					if !res.OK() {
+						failed++
+					}
+				}
+				mu.Unlock()
+				_ = os.RemoveAll(dir)
+				_ = os.RemoveAll(dir + ".twin")
+			}
+		}()
+	}
+	for _, s := range seeds {
+		work <- s
+	}
+	close(work)
+	wg.Wait()
+
+	g := kvstore.Platform()
+	fmt.Printf("| | %d seeds, %s/%s |\n|---|---|\n", len(seeds), runtime.GOOS, runtime.GOARCH)
+	for _, k := range sortedKeys(counts) {
+		fmt.Printf("| %s | %d |\n", k, counts[k])
+	}
+	fmt.Printf("| recovered through a checkpoint | %d |\n", checkpointed)
+	fmt.Printf("| seeds that failed | %d |\n", failed)
+	fmt.Printf("\ndirectory fsync on this build: %v (%s)\n", g.DirSync, g.Platform)
+	if failed > 0 {
+		return fmt.Errorf("%d of %d seeds failed", failed, len(seeds))
+	}
+	return nil
+}
+
+func shape(r crashtest.Result) string {
+	switch {
+	case r.KilledInCheckpointWrite:
+		return "killed while writing a checkpoint"
+	case r.Report.CheckpointRejected:
+		return "checkpoint rejected on its checksum"
+	case r.Report.Segments > 1:
+		return "killed between rotating the log and deleting the old segments"
+	case r.Report.Skipped > 0:
+		return "killed before the superseded segments were deleted"
+	case r.Report.Stopped != "end-of-log":
+		return "recovery stopped at a damaged record (" + string(r.Report.Stopped) + ")"
+	default:
+		return "log ended on a record boundary"
+	}
+}
+
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

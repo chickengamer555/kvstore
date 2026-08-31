@@ -132,27 +132,45 @@ control.
 
 ### What was measured, rather than assumed
 
-Running the corpus on the author's Windows machine and counting where the kills
-actually landed:
+"240 seeds" says how many times the harness ran, not how many interesting
+places it interrupted. Those are different numbers and the second one is the
+honest one, so there is a command that prints it:
+
+```sh
+go run ./crashtest/cmd/crashrepro -corpus-shapes
+```
+
+On the author's Windows machine:
 
 | | 240 seeds, windows/amd64 |
 |---|---|
-| recovery stopped at a torn record | 0 |
-| killed while writing a checkpoint | 1 |
+| log ended on a record boundary | 240 |
+| recovery stopped at a damaged record | 0 |
+| killed while writing a checkpoint | 0 |
 | killed between rotating the log and deleting the old segments | 0 |
 | recovered through a checkpoint | 218 |
 
-Two things follow. A process kill does not produce torn records for writes this
-small - the write either happened or it did not - so the torn-record path is
-covered by hand-built logs in `record_test.go` rather than by the corpus. And
-the two narrow checkpoint windows are reached rarely enough on Windows that
-they are covered explicitly, by `TestPartialCheckpointIsIgnored` and
-`TestRecoveryIgnoresRecordsTheCheckpointAlreadyCovers`, which reconstruct them
-by hand. The randomised corpus is what would catch a window nobody thought of;
-the hand-built tests cover the ones that are known and rarely hit. Neither is a
-substitute for the other, and `TestCrashCorpusRecoveryIsDeterministic` prints
-the same distribution on every CI run so this table can be checked rather than
-believed.
+The bottom three rows are the interesting ones and they are all zero, give or
+take - an earlier run of the same corpus caught one child inside a checkpoint
+write. Two things follow, and neither is flattering.
+
+A process kill does not produce torn records for writes this small: the write
+either reached the kernel or it did not. Torn records come from a page write
+interrupted by power loss, which nothing in user space can arrange. So the
+torn-record path is covered by hand-built logs in `record_test.go`, not by the
+corpus.
+
+And the two narrow windows inside checkpointing are reached so rarely on
+Windows that the corpus cannot be relied on to hit them. They are covered
+explicitly instead, by `TestPartialCheckpointIsIgnored` and
+`TestRecoveryIgnoresRecordsTheCheckpointAlreadyCovers`, which reconstruct each
+window by hand. The randomised corpus is what would catch a window nobody
+thought of; the hand-built tests cover the two that are known and rarely hit.
+Neither is a substitute for the other.
+
+This has not been measured on Linux yet - `SIGKILL` and `TerminateProcess`
+preempt differently and the distribution may well be richer there. CI prints
+the same table on every run, so it can be checked rather than believed.
 
 The corpus itself is generated, not chosen: `crashtest/corpus.txt` is splitmix64
 from a stated origin, and `TestCorpusSizeFloor` recomputes it and compares. A

@@ -59,6 +59,12 @@ jobs:
       - name: test
         run: go test -v -count=1 -timeout 20m ./...
 
+      # The distribution the README quotes: not how many times the harness ran,
+      # but where the kills actually landed. Linux and Windows should differ
+      # here, and the point of printing it is that a reader can check.
+      - name: where the kills landed
+        run: go run ./crashtest/cmd/crashrepro -corpus-shapes
+
       # A failing seed preserves the directory the dead process left behind.
       # Those bytes replay to the identical failure with one command, so they
       # are worth more than the log line that reported them.
