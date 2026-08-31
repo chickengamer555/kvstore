@@ -2,7 +2,7 @@
   "contractsDir": "verify",
   "runner": "gotest",
   "gate": {
-    "test": "go test ./...",
+    "test": "go test -count=1 ./...",
     "lint": "go vet ./..."
   },
   "quality": {

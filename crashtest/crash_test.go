@@ -453,6 +453,17 @@ func buildBrokenChild(t *testing.T) crashtest.Child {
 	if !bytes.Contains(src, []byte("//go:build kvearlyack")) {
 		t.Fatalf("walpolicy_earlyack.go is not the kvearlyack build any more")
 	}
+
+	// And the same again for the main package this actually compiles. Reading
+	// walpolicy_earlyack.go registered the file the build TAG swaps in; it did
+	// not register the program the tag is applied to, and cmd/crashrepro is not
+	// an input to this test binary either. I checked what that leaves open by
+	// appending one comment line to main.go and running the suite: `go test
+	// ./crashtest/` returned (cached). Two files, one reason.
+	if _, err := os.ReadFile(filepath.Join("cmd", "crashrepro", "main.go")); err != nil {
+		t.Fatalf("reading the child program this test builds: %v", err)
+	}
+
 	out := filepath.Join(t.TempDir(), "crashchild-earlyack"+exeSuffix())
 	cmd := exec.Command(goBin, "build", "-tags", "kvearlyack", "-o", out, "github.com/chickengamer555/kvstore/crashtest/cmd/crashrepro")
 	if combined, err := cmd.CombinedOutput(); err != nil {
