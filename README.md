@@ -3,17 +3,44 @@
 An embedded key-value store in Go whose durability claim is tested rather than
 asserted, by two harnesses that reach different things. One forks a child
 process and kills it at a randomised point under a recorded seed; a corpus of
-240 of them runs in CI on every push. The other replaces the platter instead of
-killing the process, so the power can be taken away mid-write - which is the
-only way to catch a store that never called `fsync` at all.
+240 of them runs on every push, in full on `ubuntu-latest`, which is the job
+every durability claim here is made against. The other replaces the platter
+instead of killing the process, so the power can be taken away mid-write -
+which is the only way to catch a store that never called `fsync` at all.
 
 [![ci](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml/badge.svg)](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml)
 
-Read a green tick as one CI run, not as a track record. There were three runs
-at the time of writing, and the first of them was **red** - a negative-control
-threshold set from a Windows measurement meeting Linux reality. What happened
-next is in [docs/verification.md](docs/verification.md), and the red run is
-still in the history rather than squashed out of it.
+Read a green tick as one CI run, not as a track record. Two runs in that
+history are **red** and both are still in it rather than squashed out.
+
+Run [33354896330](https://github.com/chickengamer555/kvstore/actions/runs/33354896330)
+was a negative-control threshold set from a Windows measurement meeting Linux
+reality. What happened next is in [docs/verification.md](docs/verification.md);
+the number came down and the concession is written next to it.
+
+Run [33374624703](https://github.com/chickengamer555/kvstore/actions/runs/33374624703)
+took a day to diagnose and the cause was in the crash harness, not in the store.
+On `windows-latest`, two children were killed as designed and the goroutine
+reading their output never saw the pipe close, so those seeds neither passed nor
+failed - they wedged, the package hit its twenty-minute limit, and what came out
+was a goroutine dump naming nothing. The harness's own message made it worse: it
+reported *"produced no output for 1m0s"* about children that had emitted 84 and
+138 acknowledgements, because the clock it named was an absolute deadline rather
+than the idle timer the sentence described. That sentence sent two readers
+toward "deadlock".
+
+Three things changed. The wait after the kill is bounded and closes the pipe by
+force rather than blocking. The idle bound is genuinely idle, reset by every
+acknowledgement, with a separate wall clock behind it, and the message names
+which one ran out and how far the child had got. And a seed that produces no
+observation is now counted as one - the corpus reconciles the seeds it ran
+against the observations it made, and a run that does not add up fails and names
+the seeds, rather than reporting the size of the corpus file. A reader could not
+previously tell a run of 240 seeds from a run of 238 that hung on two. The
+`windows-latest` job is also the slower one by a wide margin and has come within
+a minute of its budget; if it goes short again it now says so instead of timing
+out, but it is still a job that can be red for reasons that are not about this
+store, which is why the Linux job is the authoritative one.
 
 ## What it is
 

@@ -627,7 +627,7 @@ by grepping for `rep.`, `Stats()`, `Recovery()`, `Skipped`, `Applied`,
 tautological for some other reason would not show up in it - and the section
 below is what happened when someone went looking for one that was.
 
-### Every premise these arguments stand on, swept
+### Thirteen premises these arguments stand on, swept
 
 A reviewer deleted three lines this page never nominated - the abut check
 between segments in `loadDir`, the refusal to open when the oldest segment
@@ -650,7 +650,12 @@ the code they justify, and they are worse than untested code, because a premise
 is what makes deleting the line it names look safe.
 
 So: every place this repository says *X is safe because Y*, in this document
-and in the comments of the ten shipping files, with Y named and broken.
+and in the comments of every file in the package on every platform it builds
+for, with Y named and broken. The first version of this sweep said "the ten
+shipping files", meaning the linux/amd64 build set - which excluded
+`syncdir_windows.go` and `syncdir_other.go` by construction, and those are the
+two files whose entire content *is* a safety argument. That exclusion was
+accidental rather than argued, and it cost the thirteenth row below.
 
 | the argument | its premise `Y` | what fails when `Y` is broken |
 |---|---|---|
@@ -660,6 +665,7 @@ and in the comments of the ten shipping files, with Y named and broken.
 | an unreadable checkpoint is treated as absent, because the log is authoritative | segments are only removed after the checkpoint that supersedes them is durable | if that ever failed, the log would start past sequence 0 with no checkpoint, and the refusal at the top of `loadDir` is what catches it: `TestRecoveryRefusesToOpenWhenTheLogStartsPastTheCheckpoint`. **Nothing caught it before this turn** |
 | the four steps of `checkpointLocked` leave no window in which neither the checkpoint nor the log holds the data | the order of the four | `TestAPowerCutAnywhereInTheCheckpointPathLosesNothing`. Invert it and five of ten crash points fail, naming the keys. Proven before this turn |
 | one post-rename directory fsync is sufficient | the rename cannot become durable before the create | **nothing here can break it.** The simulated disk promotes every pending directory entry at once, so the falsifying state cannot be staged. It is an ext4/XFS journal-ordering property rather than a POSIX one, and both the comment and the section above now say so instead of implying it |
+| no directory fsync is needed on Windows | NTFS writes a new file's directory entry to the `$LogFile` transaction log before reporting the create complete, so the name is made durable by the filesystem | **nothing here can break it, for the same reason as the row above**: the simulated disk promotes every pending directory entry at once and cannot stage the falsifying state. Nor is there anything else - no crash corpus run on NTFS, no citation. It is stated more strongly than the ext4 row it mirrors, which now scopes itself. `syncdir_windows.go` carries the hedge in its last sentence and `dirSyncNote` prints it into the Windows CI log on every push, which makes it simultaneously the least verified and the most visible safety argument in the repository |
 | the segments `OpenWith` deletes hold no record recovery can reach | that the stop point is a torn tail in the newest segment | true of every directory the store produces and **false in general**. A segment beyond a gap verifies perfectly; recovery declines to reach it by choice, and then the deletion makes the choice permanent. Measured by the unlink-order test above and now written at the deletion rather than only here |
 | the `maxPayload` ceiling stops a 3.9GB `make([]byte)` | that there is an allocation on that path | **there is none.** `decodeRecord` slices a buffer `readAll` already produced, and `len(buf) < total` rejects the same input a line later, which is why deleting the ceiling left everything green. The two real reasons are in `record.go` now, and each has a test |
 | a record lifted from elsewhere fails, because the checksum is chained | the chain restarts at zero at each segment boundary | already a declared limitation with its own test: a whole segment lifted at a matching base is accepted. Proven as a limitation rather than as a guarantee |
