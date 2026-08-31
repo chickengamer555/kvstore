@@ -269,7 +269,7 @@ func RunSeed(child Child, seed uint64, dir string) (Result, error) {
 	res := Result{
 		Seed:            seed,
 		Dir:             dir,
-		KillAfterAcks:   120, // DELIBERATELY FIXED for this commit: every seed kills at the same point.
+		KillAfterAcks:   5 + rng.IntN(DefaultMaxOps-200),
 		KillJitter:      time.Duration(rng.IntN(3000)) * time.Microsecond,
 		CheckpointBytes: CheckpointBytesFor(seed),
 	}
