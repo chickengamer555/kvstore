@@ -461,6 +461,13 @@ func runAndKill(child Child, seed uint64, dir string, res *Result) error {
 	}
 
 	var acked atomic.Int64
+	// The instant of the most recent acknowledgement, as UnixNano. This is what
+	// makes the idle bound an idle bound: it is reset by progress, so a child
+	// that is slow is not confused with a child that is stuck.
+	var lastAck atomic.Int64
+	started := time.Now()
+	lastAck.Store(started.UnixNano())
+
 	reached := make(chan struct{})
 	done := make(chan struct{})
 
@@ -472,6 +479,7 @@ func runAndKill(child Child, seed uint64, dir string, res *Result) error {
 			if !strings.HasPrefix(sc.Text(), "ack ") {
 				continue
 			}
+			lastAck.Store(time.Now().UnixNano())
 			if int(acked.Add(1)) >= res.KillAfterAcks {
 				once.Do(func() { close(reached) })
 			}
@@ -480,27 +488,59 @@ func runAndKill(child Child, seed uint64, dir string, res *Result) error {
 		// which is the expected end of every run in the corpus.
 	}()
 
-	select {
-	case <-reached:
-		// The randomised part. The signal lands somewhere inside the next
-		// operation or two - possibly between the write and the fsync,
-		// possibly inside a checkpoint's rename, possibly between two of the
-		// segment deletions. That is the point: those are the offsets nobody
-		// thinks to place a crash at by hand.
-		time.Sleep(res.KillJitter)
-		if err := cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("crashtest: killing child: %w", err)
+	// Polled rather than timed, because two different clocks have to be
+	// checked and one of them is reset by the child.
+	poll := time.NewTicker(pollInterval(sup))
+	defer poll.Stop()
+
+waiting:
+	for {
+		select {
+		case <-reached:
+			// The randomised part. The signal lands somewhere inside the next
+			// operation or two - possibly between the write and the fsync,
+			// possibly inside a checkpoint's rename, possibly between two of the
+			// segment deletions. That is the point: those are the offsets nobody
+			// thinks to place a crash at by hand.
+			time.Sleep(res.KillJitter)
+			if err := cmd.Process.Kill(); err != nil {
+				return fmt.Errorf("crashtest: killing child: %w", err)
+			}
+			break waiting
+
+		case <-done:
+			res.FinishedFree = true
+			break waiting
+
+		case now := <-poll.C:
+			idle, elapsed := now.Sub(time.Unix(0, lastAck.Load())), now.Sub(started)
+			if idle < sup.Idle && elapsed < sup.Wall {
+				continue
+			}
+			// Give up on this seed, and say which clock ran out and what the
+			// child was doing when it did. These two sentences are the entire
+			// difference between "the store deadlocked" and "the runner was
+			// slow", and the previous version of this line asserted the first
+			// one about children that were producing output the whole time.
+			n := acked.Load()
+			_ = cmd.Process.Kill()
+			_ = stdout.Close()
+			_ = cmd.Wait()
+			if idle >= sup.Idle {
+				return fmt.Errorf("crashtest: seed %d produced no observation: no acknowledgement for %s (%d acknowledged of the %d this seed needs, %s since the child started)",
+					res.Seed, sup.Idle.Round(time.Millisecond), n, res.KillAfterAcks, elapsed.Round(time.Millisecond))
+			}
+			return fmt.Errorf("crashtest: seed %d produced no observation: still short of its kill point after %s (%d acknowledged of the %d this seed needs, the last one %s ago - progressing, not stuck)",
+				res.Seed, sup.Wall.Round(time.Millisecond), n, res.KillAfterAcks, idle.Round(time.Millisecond))
 		}
-	case <-done:
-		res.FinishedFree = true
-	case <-time.After(sup.Idle):
-		_ = cmd.Process.Kill()
-		<-done
-		_ = cmd.Wait()
-		return fmt.Errorf("crashtest: child for seed %d produced no output for %s", res.Seed, sup.Idle)
 	}
 
-	<-done
+	if err := drain(done, stdout, sup.Drain, res.Seed, acked.Load()); err != nil {
+		// Wait closes the parent's end of the pipe, which is the other thing
+		// that can unblock an abandoned reader.
+		_ = cmd.Wait()
+		return err
+	}
 	// Wait always reports "killed" here, which is the intended outcome, so its
 	// error is not a failure of the run. A child that failed for a real reason
 	// printed to stderr, which is inherited.
@@ -508,6 +548,56 @@ func runAndKill(child Child, seed uint64, dir string, res *Result) error {
 
 	res.Acked = int(acked.Load())
 	return nil
+}
+
+// pollInterval is how often the two clocks are checked. Twenty times inside
+// the shorter bound, and never more often than every 50ms - a test that sets a
+// one-second idle bound needs a finer grain than the corpus does.
+func pollInterval(sup Supervision) time.Duration {
+	shortest := sup.Idle
+	if sup.Wall < shortest {
+		shortest = sup.Wall
+	}
+	if d := shortest / 20; d > 50*time.Millisecond {
+		return d
+	}
+	return 50 * time.Millisecond
+}
+
+// drain waits for the reader goroutine to reach the end of the child's output.
+//
+// It is bounded, and that is the whole point of it. The receive here used to be
+// bare on both paths out of the select above, on the reasoning that a killed
+// child's pipe closes and the reader returns. On windows-latest in run
+// 33374624703 it did not: the goroutine dump has the reader parked in
+// bufio.Scanner.Scan inside poll.FD.execIO, on the stdout of a process that had
+// already been terminated, twenty minutes in. Why the handle stayed readable is
+// still unexplained - the child was a compiled binary with no grandchild to
+// inherit it - and the honest response to a cause you cannot name is a bound,
+// not a theory.
+//
+// Once the pipe has had to be closed by force the acknowledgement stream is
+// truncated at an arbitrary point, so res.Acked is no longer the number of
+// operations the child confirmed durable. Everything downstream of that number
+// is then wrong in the direction that matters: verify would check a shorter
+// prefix and report writes the child really did acknowledge as phantom reads.
+// So this seed produces no observation, which is a thing the corpus counts,
+// rather than a passing Result, which is a thing it would believe.
+func drain(done <-chan struct{}, stdout io.Closer, wait time.Duration, seed uint64, acked int64) error {
+	select {
+	case <-done:
+		return nil
+	case <-time.After(wait):
+	}
+	_ = stdout.Close()
+	select {
+	case <-done:
+		return fmt.Errorf("crashtest: seed %d produced no observation: the child was killed at %d acknowledgements but its output pipe did not close within %s; closing it by force unblocked the reader, so the acknowledged set is truncated at an unknown point rather than final",
+			seed, acked, wait)
+	case <-time.After(wait):
+		return fmt.Errorf("crashtest: seed %d produced no observation: the child was killed at %d acknowledgements and its reader did not unblock within %s even after the pipe was closed by force; that goroutine is abandoned",
+			seed, acked, wait)
+	}
 }
 
 // verify reopens the crashed directory and checks B1, B3 and B4.

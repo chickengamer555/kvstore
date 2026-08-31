@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,15 @@ const (
 	fakeOrphan = "orphan"
 	// sleeper is the grandchild. It does nothing but hold the handle.
 	fakeSleeper = "sleeper"
+
+	// envHolder is the copy of this binary the grandchild is run from, and
+	// envHold names a file it holds the pipe open for as long as that file
+	// exists. A sentinel rather than a duration, so the test releases the
+	// grandchild when it is finished with it instead of guessing how long it
+	// will need it - a guess that is either too short to stage the wedge or
+	// too long to clean up after.
+	envHolder = "KV_CRASH_HOLDER"
+	envHold   = "KV_CRASH_HOLD_WHILE"
 )
 
 // runFakeChild is called from TestMain before anything else. It returns the
@@ -63,12 +73,12 @@ func runFakeChild(mode string) int {
 		return 0
 
 	case fakeOrphan:
-		exe, err := os.Executable()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		holder := os.Getenv(envHolder)
+		if holder == "" {
+			fmt.Fprintf(os.Stderr, "%s is not set\n", envHolder)
 			return 1
 		}
-		grandchild := exec.Command(exe)
+		grandchild := exec.Command(holder)
 		grandchild.Env = append(os.Environ(), envFakeChild+"="+fakeSleeper)
 		// The point of the whole exercise: the grandchild inherits this
 		// process's stdout, which is the harness's pipe. Killing this process
@@ -82,10 +92,21 @@ func runFakeChild(mode string) int {
 		return 0
 
 	case fakeSleeper:
-		// Bounded, so a wedged test does not leave a process behind for long.
-		// It must outlive the harness's drain bound, which is what makes the
-		// pipe stay open past the kill.
-		time.Sleep(30 * time.Second)
+		// Holds the inherited pipe until the test says it is done, and no
+		// longer than a minute whatever happens - an orphan with no way to die
+		// is a worse bug than the one being staged.
+		sentinel := os.Getenv(envHold)
+		if sentinel == "" {
+			fmt.Fprintf(os.Stderr, "%s is not set\n", envHold)
+			return 1
+		}
+		deadline := time.Now().Add(time.Minute)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(sentinel); err != nil {
+				return 0
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		return 0
 	}
 	fmt.Fprintf(os.Stderr, "unknown fake child mode %q\n", mode)
@@ -219,6 +240,51 @@ func TestAChildThatIsStillAcknowledgingIsNotReportedAsSilent(t *testing.T) {
 	}
 }
 
+// holderCopy stages the grandchild: a copy of this test binary, and the
+// sentinel file it holds the inherited pipe open for. It returns both paths.
+//
+// The grandchild has to be run from a copy rather than from the binary itself.
+// It outlives the child by design, and on Windows a running executable cannot
+// be deleted, so `go test` cleaning up its own binary would fail with "Access
+// is denied" at the end of an otherwise green run. That is exactly the class of
+// noise this repository should not be shipping at the bottom of a green log.
+func holderCopy(t *testing.T) (exePath, sentinel string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("cannot find the test binary to copy: %v", err)
+	}
+	src, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatalf("reading the test binary: %v", err)
+	}
+	dir, err := os.MkdirTemp("", "kvstore-holder-")
+	if err != nil {
+		t.Fatalf("staging the holder: %v", err)
+	}
+	exePath = filepath.Join(dir, filepath.Base(exe))
+	if err := os.WriteFile(exePath, src, 0o755); err != nil {
+		t.Fatalf("writing the holder: %v", err)
+	}
+	sentinel = filepath.Join(dir, "hold")
+	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+		t.Fatalf("writing the holder sentinel: %v", err)
+	}
+	t.Cleanup(func() {
+		// Release the grandchild first, then wait for it to go: the directory
+		// cannot be removed while the copy inside it is running.
+		_ = os.Remove(sentinel)
+		for range 100 {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Logf("the holder copy in %s outlived its test; it exits on its own within a minute", dir)
+	})
+	return exePath, sentinel
+}
+
 // B5, and the liveness defect run 33374624703 actually died of.
 //
 // childTimeout used to guard only the select before the kill. Both paths out of
@@ -240,8 +306,27 @@ func TestAChildThatIsStillAcknowledgingIsNotReportedAsSilent(t *testing.T) {
 // built from an acknowledgement stream it could not finish reading.
 func TestAPipeThatDoesNotCloseAfterTheKillIsBoundedRatherThanBlocking(t *testing.T) {
 	t.Parallel()
+	// A seed with a kill point close enough to the start that the child is dead
+	// while the grandchild is still holding the pipe. The whole staging depends
+	// on that order, so it is decided from the plan rather than hoped for.
+	var seed uint64
+	for s := uint64(1); s < 1000; s++ {
+		if acks, _ := crashtest.KillPlan(s); acks < 25 {
+			seed = s
+			break
+		}
+	}
+	if seed == 0 {
+		t.Fatal("no seed under 1000 has a kill point inside 25 acknowledgements; this test needs the kill to land early")
+	}
+	killPoint, _ := crashtest.KillPlan(seed)
+
 	sup := crashtest.Supervision{Idle: 10 * time.Second, Wall: 30 * time.Second, Drain: time.Second}
-	res, err := runSeedWithin(t, fakeChild(t, fakeOrphan, sup), 2, 25*time.Second)
+	child := fakeChild(t, fakeOrphan, sup)
+	holder, sentinel := holderCopy(t)
+	child.Env = append(child.Env, envHolder+"="+holder, envHold+"="+sentinel)
+	t.Logf("seed %d is killed after %d acknowledgements, about %s in", seed, killPoint, time.Duration(killPoint)*20*time.Millisecond)
+	res, err := runSeedWithin(t, child, seed, 25*time.Second)
 
 	if err == nil {
 		t.Fatalf("RunSeed returned normally although the acknowledgement stream was never finished: %+v", res)
