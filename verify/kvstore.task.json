@@ -62,7 +62,7 @@
         { "id": "acked-write-survives-immediate-kill", "description": "the bytes are on disk the instant Put returns: replaying the log file alone, with no in-memory state and no Close, yields the key", "probe": true, "maps_to_clause": "B1" },
         { "id": "unacked-write-may-vanish", "description": "a write whose record was torn by the crash is permitted to be absent, and its absence is not reported as an error - asserts the suite does not over-claim", "maps_to_clause": "B1" },
         { "id": "fsync-precedes-ack", "description": "the recorded event order is sync-start, sync-return, ack - never ack before sync-return", "probe": true, "maps_to_clause": "B2" },
-        { "id": "dir-fsync-on-log-create", "description": "the containing directory is synced when a log segment is created; where the platform has no such syscall the store must report the guarantee as unavailable rather than claim it", "probe": true, "maps_to_clause": "B2" }
+        { "id": "dir-fsync-on-log-create", "test_name": "TestPlatformReportsItsDirectorySyncGuaranteeHonestly", "description": "the store always reaches the directory-sync decision when a log segment is created, and what it reports about itself matches the build it is - claiming the guarantee where it has it and reporting it unavailable where it does not. This case is about honest self-report and nothing else; that the sync actually makes the entry durable is simulated-disk/new-segments-directory-entry-is-made-durable, because an emitted event cannot establish it", "probe": true, "maps_to_clause": "B2" }
       ]
     },
     {

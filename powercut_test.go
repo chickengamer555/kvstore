@@ -3,6 +3,7 @@ package kvstore
 import (
 	"bytes"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -401,4 +402,43 @@ func TestCheckpointedStateSurvivesASimulatedPowerCut(t *testing.T) {
 			t.Fatalf("acknowledged key %q = %q, %v after the power cut; want %q, true", key, got, ok, want)
 		}
 	}
+}
+
+// The negative control, and the reason it is here rather than in crashtest/.
+//
+// A suite that has only ever run against correct code has not been shown to
+// detect anything, so this repository builds a store that really does lose
+// data - walpolicy_earlyack.go, which acknowledges writes while they are still
+// in a user-space buffer - and requires the harness to catch it.
+//
+// Until now that requirement lived entirely in the crash corpus, and CI's
+// first Linux run showed why that was not good enough: the same broken build,
+// the same 24 seeds, caught 13 times on windows/amd64 and 4 times on
+// ubuntu-latest. Nothing about the store changed between those runs. What
+// changed is where a signal lands relative to a buffer flush, which is the
+// scheduler's business and not this project's. A detection rate that moves by
+// a factor of three across platforms is not a threshold anything should be
+// asserted against.
+//
+// Under the simulated disk there is no rate. The broken build never gets the
+// record to the file at all, so the power cut takes it every single time, on
+// every platform. This is the control the rest of the file now rests on.
+func TestTheBrokenBuildFailsThePowerCutTest(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("BLOCKED: no go toolchain on PATH, so the deliberately broken build could not be compiled and the negative control did not run: %v", err)
+	}
+
+	// The child runs one named test, so it never re-enters this one.
+	cmd := exec.Command(goBin, "test", "-count=1", "-tags", "kvearlyack",
+		"-run", "^TestAckedWriteSurvivesASimulatedPowerCut$", ".")
+	out, err := cmd.CombinedOutput()
+
+	if err == nil {
+		t.Fatalf("the kvearlyack build PASSED the power-cut test. Either -tags kvearlyack no longer breaks anything, or the simulated disk stopped discarding unsynced writes - and both make every green run in powercut_test.go meaningless.\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("is gone after the power cut")) {
+		t.Fatalf("the broken build failed, but not on the assertion this control is about - it must lose an acknowledged key, not fall over for some other reason.\n%s", out)
+	}
+	t.Logf("the deliberately broken build loses acknowledged writes under the simulated power cut, deterministically")
 }

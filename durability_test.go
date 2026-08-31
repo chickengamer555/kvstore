@@ -198,18 +198,21 @@ func TestFsyncPrecedesAck(t *testing.T) {
 	}
 }
 
-// B2. A newly created file's directory entry is not durable until the
-// containing directory is itself synced. On Linux that is an explicit
-// fsync(2) on a descriptor for the directory and the application owns it. On
-// Windows there is no such call, and none is needed: NTFS journals metadata
-// operations, so the directory entry is made durable by the filesystem rather
-// than by us.
+// B2, and this test is named for exactly what it checks, because the previous
+// name promised more than it delivered.
 //
-// Both of those are claims about the platform, and the store has to make the
-// right one. What this test asserts is that the store always reaches the
-// decision point and always reports honestly which side of it this build is
-// on - it must never quietly do nothing and let the README imply otherwise.
-func TestDirFsyncOnLogCreate(t *testing.T) {
+// It does NOT prove the directory fsync makes anything durable. It cannot: the
+// only evidence available to it is an event the store emitted, which is the
+// same self-report that let a build with the log's fsync deleted pass the
+// whole suite. TestANewSegmentsDirectoryEntryIsMadeDurable is the test that
+// proves the sync happens, by taking the power away when it does not.
+//
+// What this one checks is worth checking and is a different thing: that the
+// store always REACHES the decision, and that what it says about itself
+// matches the build it is. A store that quietly did nothing on a platform with
+// no directory fsync, and let a README written against Linux speak for it,
+// would pass nothing here.
+func TestPlatformReportsItsDirectorySyncGuaranteeHonestly(t *testing.T) {
 	dir := t.TempDir()
 	tr := &tracer{}
 	s, err := OpenWith(Options{Dir: dir, trace: tr.on})
@@ -246,10 +249,11 @@ func TestDirFsyncOnLogCreate(t *testing.T) {
 		if tr.events[dirSync] != "dir-sync:unsupported" {
 			t.Errorf("this build does not have directory fsync but recorded %q", tr.events[dirSync])
 		}
-		// BLOCKED, not passed: nothing about directory-entry durability was
-		// verified on this platform. The store says why, and CI on Linux is
-		// where the positive case is actually checked.
-		t.Logf("BLOCKED on %s: %s", g.Platform, g.DirSyncNote)
+		// This is the one statement on this platform that nothing here checks,
+		// and it is a claim about the filesystem rather than about the store.
+		// It is logged so that a green run on Windows does not read as though
+		// it had been established.
+		t.Logf("NOT VERIFIED BY ANYTHING HERE, on %s: %s", g.Platform, g.DirSyncNote)
 	}
 
 	// The build tags are the thing most likely to rot here, so pin the one
