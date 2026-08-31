@@ -36,9 +36,10 @@ func (w *wal) commit(enc []byte) (int, error) {
 	w.emit("write-return", "")
 
 	w.emit("sync-start", "")
-	if err := w.f.Sync(); err != nil {
-		return n, fmt.Errorf("kvstore: syncing log: %w", err)
-	}
+	// DELIBERATELY DELETED for this commit: `if err := w.f.Sync(); err != nil
+	// { return n, ... }`. Everything else - the emits, the counter, the
+	// compile-time ackAfterSync constant - is left exactly as it was, which is
+	// the whole point. Restored in the next commit.
 	w.syncs++
 	w.emit("sync-return", "")
 	return n, nil

@@ -1,0 +1,328 @@
+package kvstore
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+// These tests run the real store against the simulated disk in simdisk_test.go
+// - the real Put, the real log, the real recovery, with only the platter
+// replaced. They cover the three things a process-kill harness provably
+// cannot reach, and which `crashrepro -corpus-shapes` measured the 240-seed
+// corpus to produce exactly zero of:
+//
+//	a power cut, which loses everything not fsynced
+//	a page that was half written when the power went
+//	a write made durable out of order, leaving a hole
+//
+// After Process.Kill the page cache is intact and the kernel writes unsynced
+// data out anyway, so the corpus cannot see any of this. That was a stated
+// limitation of this repository and it is no longer one.
+
+func openSim(t *testing.T, d *simDisk) *Store {
+	t.Helper()
+	s, err := OpenWith(Options{Dir: "sim", fsys: d.FS("sim")})
+	if err != nil {
+		t.Fatalf("OpenWith on the simulated disk: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// The simulator has to be falsifiable before anything built on it means
+// anything. If Crash() quietly kept the pending layer, every test below would
+// pass against a store that never fsynced - which is precisely the failure
+// this whole seam exists to end. So this checks the disk against itself,
+// through the same interface the store uses and nothing else.
+func TestSimDiskLosesWritesThatWereNeverSynced(t *testing.T) {
+	disk := newSimDisk()
+	fsys := disk.FS("sim")
+
+	f, err := fsys.create("F")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := f.WriteAt([]byte("unsynced"), 0); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+
+	// The writing process can read back its own unsynced write, exactly as it
+	// can through the page cache on a real machine.
+	got, err := readAll(fsys, "F")
+	if err != nil {
+		t.Fatalf("readAll before the crash: %v", err)
+	}
+	if string(got) != "unsynced" {
+		t.Fatalf("before the crash the file read back %q, want %q", got, "unsynced")
+	}
+
+	disk.Crash()
+	got, err = readAll(fsys, "F")
+	if err != nil {
+		t.Fatalf("readAll after the crash: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("after the power cut the file still held %q - the simulated disk is not discarding unsynced writes, so every test built on it is vacuous", got)
+	}
+
+	// And the other direction: a synced write survives, or the disk would
+	// simply be broken rather than strict.
+	if _, err := f.WriteAt([]byte("synced"), 0); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	disk.Crash()
+	got, err = readAll(fsys, "F")
+	if err != nil {
+		t.Fatalf("readAll after the second crash: %v", err)
+	}
+	if string(got) != "synced" {
+		t.Fatalf("after the power cut the synced file read back %q, want %q", got, "synced")
+	}
+}
+
+// B2, and the only test in this repository that can tell a store which fsyncs
+// from a store which says it does.
+//
+// Nothing here inspects an event the store emitted or a counter the store
+// incremented. The store writes, the power goes, and a second store opens the
+// same platter. If the commit path did not fsync, the record never left the
+// pending layer and the key is simply not there.
+//
+// Delete `w.f.Sync()` from walpolicy.go commit() and this test fails with
+// "alpha is gone". That was checked, not assumed - see the red proof for
+// simulated-disk/acked-write-survives-a-power-cut.
+func TestAckedWriteSurvivesASimulatedPowerCut(t *testing.T) {
+	disk := newSimDisk()
+	s := openSim(t, disk)
+
+	want := map[string][]byte{
+		"alpha": []byte("one"),
+		"beta":  []byte("two"),
+		"gamma": bytes.Repeat([]byte("g"), 1500), // spans several pages
+	}
+	for _, k := range []string{"alpha", "beta", "gamma"} {
+		if err := s.Put(k, want[k]); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+	}
+
+	// The power goes here. No Close, no flush, no chance to tidy up - which is
+	// the only condition under which the claim means anything.
+	disk.Crash()
+
+	if disk.Syncs() == 0 {
+		t.Fatal("the disk recorded no fsync at all across three acknowledged writes")
+	}
+
+	reopened := openSim(t, disk)
+	for k, v := range want {
+		got, ok := reopened.Get(k)
+		if !ok {
+			t.Errorf("%s is gone after the power cut - Put acknowledged it, so it had to be durable", k)
+			continue
+		}
+		if !bytes.Equal(got, v) {
+			t.Errorf("%s came back as %d bytes, want %d", k, len(got), len(v))
+		}
+	}
+	if r := reopened.Recovery(); r.Stopped != stopEndOfLog {
+		t.Errorf("recovery stopped for reason %q, want %q - every write here was synced, so the log should be intact", r.Stopped, stopEndOfLog)
+	}
+}
+
+// B3, over the shape a process kill cannot make.
+//
+// A page is not written atomically. When the power goes part-way through
+// making a page durable, the file is left with a prefix of the record and
+// nothing after it - a torn tail produced by the real write path rather than
+// by a test splicing bytes into a file, which is what record_test.go does.
+//
+// One honesty note about the model. On real hardware the fsync would never
+// have returned and Put would never have acknowledged. Nothing in a Go test
+// can model a call that does not come back, so the fault lets the Sync return
+// and the test cuts the power on the next line. What is faithful is the state
+// left on the platter, which is the only part recovery has to cope with.
+func TestATornPageLeavesEveryAcknowledgedWriteRecoverable(t *testing.T) {
+	disk := newSimDisk()
+	s := openSim(t, disk)
+
+	acked := []string{"a", "b", "c"}
+	for _, k := range acked {
+		if err := s.Put(k, []byte("acked-"+k)); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+	}
+
+	seg, err := findSimSegment(disk)
+	if err != nil {
+		t.Fatalf("locating the log segment: %v", err)
+	}
+	before := len(disk.DurableBytes(seg))
+
+	// The next fsync is interrupted after 30 bytes: a record header plus nine
+	// bytes of a payload that claims far more.
+	const torn = 30
+	disk.FaultNextSync(seg, tornSync(torn))
+	if err := s.Put("d", []byte(strings.Repeat("d", 300))); err != nil {
+		t.Fatalf("Put(d): %v", err)
+	}
+	disk.Crash()
+
+	if got := len(disk.DurableBytes(seg)); got != before+torn {
+		t.Fatalf("the platter holds %d bytes, want %d - the torn page was not staged, so this test is not testing what it says", got, before+torn)
+	}
+
+	reopened := openSim(t, disk)
+	for _, k := range acked {
+		if got, ok := reopened.Get(k); !ok || !bytes.Equal(got, []byte("acked-"+k)) {
+			t.Errorf("acknowledged key %q = %q, %v after a torn page; want %q, true", k, got, ok, "acked-"+k)
+		}
+	}
+	if got, ok := reopened.Get("d"); ok {
+		t.Errorf("Get(d) = %q, true - only 30 bytes of that record reached the platter and it must not be returned", got)
+	}
+	if r := reopened.Recovery(); r.Stopped != stopTornRecord {
+		t.Errorf("recovery stopped for reason %q, want %q", r.Stopped, stopTornRecord)
+	}
+
+	// And the half that a test which only reads after recovery would miss.
+	// The reopened log has to be cut back to the last byte recovery vouched
+	// for, or the next record is written past the point the next recovery
+	// stops at - fsynced, acknowledged, and then never read again. So: write
+	// one more key, take the power away again, and open a third time.
+	if err := reopened.Put("e", []byte("after-the-tear")); err != nil {
+		t.Fatalf("Put(e) after recovering from a torn page: %v", err)
+	}
+	disk.Crash()
+
+	third := openSim(t, disk)
+	for _, k := range acked {
+		if got, ok := third.Get(k); !ok || !bytes.Equal(got, []byte("acked-"+k)) {
+			t.Errorf("acknowledged key %q = %q, %v after the second power cut; want %q, true", k, got, ok, "acked-"+k)
+		}
+	}
+	if got, ok := third.Get("e"); !ok || !bytes.Equal(got, []byte("after-the-tear")) {
+		t.Errorf("Get(e) = %q, %v - a write acknowledged after recovery was not readable, which is what happens when the torn tail is not truncated away", got, ok)
+	}
+}
+
+// B3 and B4, over the other shape a process kill cannot make.
+//
+// A device with a volatile write cache may complete queued writes in any order
+// it likes. If the power goes half way through, a later part of a write can be
+// on the platter while an earlier part of the same write is not - and the gap
+// reads back as zeros, because those bytes were never written.
+//
+// The property this pins is the one replayBytes exists for: recovery stops at
+// the hole and never scans forward looking for something that decodes. The
+// assertion below is deliberately in two halves - the tail fragment IS on the
+// platter, and the key is still not readable - because a recovery that skipped
+// the damage would satisfy the second half on its own by accident.
+func TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery(t *testing.T) {
+	disk := newSimDisk()
+	s := openSim(t, disk)
+
+	acked := []string{"a", "b", "c"}
+	for _, k := range acked {
+		if err := s.Put(k, []byte("acked-"+k)); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+	}
+
+	seg, err := findSimSegment(disk)
+	if err != nil {
+		t.Fatalf("locating the log segment: %v", err)
+	}
+	before := len(disk.DurableBytes(seg))
+
+	// Big enough to span several pages, and ending in something recognisable
+	// so the test can prove the out-of-order tail really landed.
+	const marker = "REORDERED-TAIL!!"
+	value := append(bytes.Repeat([]byte("x"), 2000), marker...)
+
+	disk.FaultNextSync(seg, lastPageOnlySync())
+	if err := s.Put("big", value); err != nil {
+		t.Fatalf("Put(big): %v", err)
+	}
+	disk.Crash()
+
+	platter := disk.DurableBytes(seg)
+	if len(platter) <= before+simPageSize {
+		t.Fatalf("the platter grew from %d to %d bytes - the out-of-order page was not staged", before, len(platter))
+	}
+	if !bytes.Contains(platter[before:], []byte(marker)) {
+		t.Fatalf("the last page of the write is not on the platter, so this test is not testing an out-of-order flush")
+	}
+	if !bytes.Equal(platter[before:before+16], make([]byte, 16)) {
+		t.Fatalf("the bytes at the start of the interrupted write are %x, want zeros - a page that was never written reads back as a hole", platter[before:before+16])
+	}
+
+	// Two independent recoveries of the same platter, because the first Open
+	// repairs the directory and re-opening it would compare a crashed store
+	// with a repaired one.
+	twin := disk.Clone()
+	reopened := openSim(t, disk)
+	twinStore := openSim(t, twin)
+
+	for _, k := range acked {
+		if got, ok := reopened.Get(k); !ok || !bytes.Equal(got, []byte("acked-"+k)) {
+			t.Errorf("acknowledged key %q = %q, %v after an out-of-order flush; want %q, true", k, got, ok, "acked-"+k)
+		}
+	}
+	if got, ok := reopened.Get("big"); ok {
+		t.Errorf("Get(big) = %d bytes, true - the record's own bytes were never made durable and recovery must not have reached past the hole to find its tail", len(got))
+	}
+	if r := reopened.Recovery(); r.Stopped == stopEndOfLog {
+		t.Errorf("recovery reported %q over a log with a hole in it", r.Stopped)
+	}
+	if !bytes.Equal(reopened.Snapshot(), twinStore.Snapshot()) {
+		t.Error("two independent recoveries of the same crashed platter produced different state")
+	}
+}
+
+// The checkpoint path has its own fsync and its own ordering, and until now
+// nothing established that the checkpoint's fsync was load-bearing either.
+//
+// The store is driven past its checkpoint bound, the power goes with no Close,
+// and a second store opens the platter. Everything acknowledged has to be
+// there whether it came back from the checkpoint or from the log that
+// supersedes it.
+func TestCheckpointedStateSurvivesASimulatedPowerCut(t *testing.T) {
+	disk := newSimDisk()
+	s, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("OpenWith: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	const n = 200
+	for i := range n {
+		if err := s.Put(fmt.Sprintf("k%03d", i), []byte(fmt.Sprintf("v%03d", i))); err != nil {
+			t.Fatalf("Put(%d): %v", i, err)
+		}
+	}
+	if s.Stats().Checkpoints == 0 {
+		t.Fatal("no checkpoint was taken, so this test is not exercising the checkpoint path")
+	}
+
+	disk.Crash()
+
+	reopened, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 4 << 10, fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening after the power cut: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	for i := range n {
+		key := fmt.Sprintf("k%03d", i)
+		want := fmt.Sprintf("v%03d", i)
+		if got, ok := reopened.Get(key); !ok || string(got) != want {
+			t.Fatalf("acknowledged key %q = %q, %v after the power cut; want %q, true", key, got, ok, want)
+		}
+	}
+}

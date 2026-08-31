@@ -14,7 +14,7 @@
     {
       "id": "B2",
       "text": "Durability comes from fsync, not from write returning. No acknowledgement is issued before the log's fsync returns, and creating the log file fsyncs the directory that contains it.",
-      "observable_by": "an ordering test records sync-start, sync-return and ack as they happen and asserts sync-return precedes ack; on a platform with directory fsync the sync of the containing directory is asserted at log creation, and on a platform without it the test asserts the store reports the guarantee as unavailable rather than claiming it",
+      "observable_by": "the store writes through a simulated file with a durable layer and a pending layer, where only Sync promotes pending to durable; a test acknowledges a write, takes the power away, reopens and requires the value to be there - so a commit path with the fsync removed loses the data and the test fails. The event-ordering test (sync-start, sync-return, ack) is kept alongside it as a check on the sequence, but it is self-report and nothing rests on it. On a platform with directory fsync the sync of the containing directory is asserted at log creation, and on a platform without it the test asserts the store reports the guarantee as unavailable rather than claiming it",
       "rationale": "A successful write(2) guarantees nothing - the bytes sit in the page cache and a power cut loses them. The directory entry for a newly created file needs its own fsync or the file itself can vanish. This is the most common thing people get wrong."
     },
     {
@@ -82,6 +82,17 @@
         { "id": "log-bounded-under-sustained-writes", "description": "live log segment bytes stay under the stated bound while total bytes written exceeds it by 10x or more", "probe": true, "maps_to_clause": "B6" },
         { "id": "recovery-after-checkpoint-preserves-acked", "description": "acknowledged writes survive reopening after a checkpoint, including writes made before the checkpoint", "maps_to_clause": "B6" },
         { "id": "partial-checkpoint-is-ignored", "description": "a checkpoint file left half-written by a crash is rejected by its checksum and recovery falls back to the log", "probe": true, "maps_to_clause": "B6" }
+      ]
+    },
+    {
+      "id": "simulated-disk",
+      "surface": "file.go, walpolicy.go, checkpoint.go",
+      "tests": "simdisk_test.go, powercut_test.go",
+      "note": "The store writes through a simulated file whose bytes only become durable when Sync is called, so a power cut can be staged in-process. This is the only place in the repository where a missing fsync is detectable: after Process.Kill the page cache is intact, so the crash corpus cannot see one.",
+      "cases": [
+        { "id": "acked-write-survives-a-power-cut", "test_name": "TestAckedWriteSurvivesASimulatedPowerCut", "description": "writes are acknowledged, the simulated power is cut with no Close, and a second store opened on the same platter returns every one of them - the assertion is on the data, not on any event or counter the store reports about itself", "probe": true, "maps_to_clause": "B2" },
+        { "id": "checkpointed-state-survives-a-power-cut", "test_name": "TestCheckpointedStateSurvivesASimulatedPowerCut", "description": "the same, driven past the checkpoint bound, so the checkpoint's own fsync and the ordering around it are covered too", "maps_to_clause": "B2" },
+        { "id": "out-of-order-flush-is-not-skipped-over", "test_name": "TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery", "guard": true, "description": "a later page of a write is made durable while an earlier page of the same write is not, leaving a hole; recovery stops at the hole and never scans forward to the intact tail sitting beyond it. Declared a guard rather than a probe because it has no honest red proof: this store never had a scanning recovery to break, so there is no implementation of it that this case catches and record_test.go does not. Its value is that the shape is produced by the real write path and is one the crash corpus was measured to produce zero of.", "maps_to_clause": "B3" }
       ]
     },
     {

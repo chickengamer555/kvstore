@@ -198,6 +198,28 @@
       "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "acked-write-survives-a-power-cut",
+      "key": "simulated-disk/acked-write-survives-a-power-cut",
+      "matched_test": "TestAckedWriteSurvivesASimulatedPowerCut",
+      "failed_at": "2026-08-31T04:03:47.764Z",
+      "contract_hash": "23731c143a96aef97d9f8ba7f0db83d75c5069b2ac7cefdaa3704eb737981462",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "checkpointed-state-survives-a-power-cut",
+      "key": "simulated-disk/checkpointed-state-survives-a-power-cut",
+      "matched_test": "TestCheckpointedStateSurvivesASimulatedPowerCut",
+      "failed_at": "2026-08-31T04:03:47.764Z",
+      "contract_hash": "23731c143a96aef97d9f8ba7f0db83d75c5069b2ac7cefdaa3704eb737981462",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
