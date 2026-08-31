@@ -135,10 +135,28 @@ func loadDir(fsys fileSystem) (*dirState, error) {
 		// boundary; the checksum chain ties records together within a segment.
 		endCRC, endSeq, consumed, reason := replayBytes(buf, 0, base+1, func(r record) {
 			// Records the checkpoint already contains are verified - they are
-			// part of the chain - but not re-applied. Applying only a
-			// surviving suffix of them would overwrite newer values with older
-			// ones, which is the exact bug that makes a crash during
-			// checkpointing corrupt a store.
+			// part of the chain - but not re-applied.
+			//
+			// This comment used to claim the skip prevents "the exact bug that
+			// makes a crash during checkpointing corrupt a store", and that
+			// was more than the code does. Re-applying every surviving
+			// superseded record is a no-op on data: the checkpoint is a fold
+			// of the complete prefix, so replaying a SUFFIX of that prefix
+			// over it lands back on the same values. And a suffix is what a
+			// crash mid-deletion leaves, because checkpointLocked unlinks
+			// oldest first and the abut check above refuses a gap. Under this
+			// store's own ordering the skip therefore buys work, not
+			// correctness, and the test for that window cannot fail on data.
+			//
+			// It stops being a no-op the moment replay STOPS partway through
+			// the superseded range: what gets applied is then a PREFIX, and a
+			// prefix puts back values the checkpoint has already superseded.
+			// TestAStoppedReplayNeverReAppliesSupersededRecords stages that
+			// and loses all ten of its keys without this branch. The store
+			// does not currently produce that directory - it needs a torn tail
+			// in a segment that is not the last one - but the log format
+			// admits it, and recovery is the wrong place to lean on an
+			// invariant maintained in checkpoint.go.
 			if r.seq <= st.report.CheckpointSeq {
 				st.report.Skipped++
 				return
