@@ -361,6 +361,33 @@ not sync went on acknowledging writes it could no longer recover. Each is
 followed by the commit that answers it. `git checkout <sha> && go test -count=1 ./...`
 is the check.
 
+### How the ledger was re-established
+
+`general-harness` keys each proof to the hash of the contract it was recorded
+against, so every case added to `verify/kvstore.task.json` stales the proofs that
+came before it. Rather than edit the contract to match old hashes - which would
+be forging the evidence rather than gathering it - every case was observed
+failing again, against the contract as it now stands, in six runs of
+`general-verify red`. Each run breaks something, runs the whole gate, records
+which declared cases were seen failing, and is then reverted.
+
+| what was broken | cases recorded |
+|---|---|
+| `decodeRecord`: the checksum comparison and the sequence comparison dropped, and the three length failures reported as checksum mismatches | the four framing cases |
+| `walpolicy.go`: the honest commit replaced with the buffering one from the `kvearlyack` build - acknowledge now, flush every 4KB | `acked-write-survives-immediate-kill`, `unacked-write-may-vanish`, `fsync-precedes-ack` |
+| five independent deletions: `readErr = err`, `os.O_EXCL`, the `Truncate` in `reopenSegment`, `sort.Strings` in `encodeState`, and `earlyAckFlushBytes` set to 1 so the negative control is disarmed | `replay-is-byte-identical`, `snapshot-order-independent-of-insert-order`, `seeded-corpus-no-acked-loss`, `seed-reproduces-failure`, `broken-build-fails-the-power-cut-test`, `recovery-read-failure-is-not-the-end-of-the-log`, `create-refuses-a-name-that-exists` |
+| `createSegment`'s `syncDir` and its `dir-sync` event; the checkpoint trigger in `write` and `PutBatch`; `loadCheckpoint`'s checksum comparison | twelve, including `dir-fsync-on-log-create`, `log-bounded-under-sustained-writes` and `partial-checkpoint-is-ignored` |
+| the `syncDir` after the checkpoint rename | `checkpoint-is-durable-as-soon-as-it-is-installed`, `power-cut-anywhere-in-the-checkpoint-path-loses-nothing` |
+| the crash harness: a fixed kill offset in place of the randomised one, one constant changed in the corpus generator, the `Skipped > 0` branch of `Shape`, and `sort.Strings` on the findings | `kill-points-are-spread`, `corpus-size-floor`, `crash-corpus-recovery-is-deterministic`, `replayed-findings-are-in-a-stable-order`, `every-recovery-shape-is-tallied` |
+
+A run records every case whose test failed, so where a break was broad some
+cases were recorded by more than one of these and the ledger keeps the last.
+The table says which run each proof finally came from, and the honest reading of
+a broad break is that it shows the test is wired to *something* the break
+touched; a narrow one shows more. The last three rows are narrow on purpose.
+
+### Individual deletions
+
 These lines have each been deleted, with the suite run against the result:
 
 | line removed | what turns red |

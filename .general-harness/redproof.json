@@ -7,9 +7,9 @@
       "case": "corrupt-byte-ends-recovery",
       "key": "framing/corrupt-byte-ends-recovery",
       "matched_test": "TestCorruptByteEndsRecovery",
-      "failed_at": "2026-08-31T02:02:00.736Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:57:52.036Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -18,9 +18,9 @@
       "case": "torn-tail-record-discarded",
       "key": "framing/torn-tail-record-discarded",
       "matched_test": "TestTornTailRecordDiscarded",
-      "failed_at": "2026-08-31T02:02:00.736Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:57:52.036Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -29,9 +29,9 @@
       "case": "sequence-break-ends-recovery",
       "key": "framing/sequence-break-ends-recovery",
       "matched_test": "TestSequenceBreakEndsRecovery",
-      "failed_at": "2026-08-31T02:02:00.736Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:57:52.036Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -40,9 +40,9 @@
       "case": "absurd-length-field-is-a-torn-tail",
       "key": "framing/absurd-length-field-is-a-torn-tail",
       "matched_test": "TestAbsurdLengthFieldIsATornTail",
-      "failed_at": "2026-08-31T02:02:00.736Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:57:52.036Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -51,9 +51,9 @@
       "case": "acked-write-survives-immediate-kill",
       "key": "durability/acked-write-survives-immediate-kill",
       "matched_test": "TestAckedWriteSurvivesImmediateKill",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:58:55.117Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -62,9 +62,9 @@
       "case": "unacked-write-may-vanish",
       "key": "durability/unacked-write-may-vanish",
       "matched_test": "TestUnackedWriteMayVanish",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:58:55.117Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -73,9 +73,9 @@
       "case": "fsync-precedes-ack",
       "key": "durability/fsync-precedes-ack",
       "matched_test": "TestFsyncPrecedesAck",
-      "failed_at": "2026-08-31T02:09:24.704Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T06:58:55.117Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -83,10 +83,10 @@
       "unit": "durability",
       "case": "dir-fsync-on-log-create",
       "key": "durability/dir-fsync-on-log-create",
-      "matched_test": "TestDirFsyncOnLogCreate",
-      "failed_at": "2026-08-31T02:09:24.704Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "matched_test": "TestPlatformReportsItsDirectorySyncGuaranteeHonestly",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -95,9 +95,9 @@
       "case": "replay-is-byte-identical",
       "key": "recovery/replay-is-byte-identical",
       "matched_test": "TestReplayIsByteIdentical",
-      "failed_at": "2026-08-31T02:14:44.555Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -106,9 +106,9 @@
       "case": "snapshot-order-independent-of-insert-order",
       "key": "recovery/snapshot-order-independent-of-insert-order",
       "matched_test": "TestSnapshotOrderIndependentOfInsertOrder",
-      "failed_at": "2026-08-31T02:14:44.555Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -117,9 +117,9 @@
       "case": "log-bounded-under-sustained-writes",
       "key": "checkpoint/log-bounded-under-sustained-writes",
       "matched_test": "TestLogBoundedUnderSustainedWrites",
-      "failed_at": "2026-08-31T02:19:26.845Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -128,9 +128,9 @@
       "case": "recovery-after-checkpoint-preserves-acked",
       "key": "checkpoint/recovery-after-checkpoint-preserves-acked",
       "matched_test": "TestRecoveryAfterCheckpointPreservesAcked",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -139,9 +139,9 @@
       "case": "partial-checkpoint-is-ignored",
       "key": "checkpoint/partial-checkpoint-is-ignored",
       "matched_test": "TestPartialCheckpointIsIgnored",
-      "failed_at": "2026-08-31T02:19:26.845Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -150,9 +150,9 @@
       "case": "seeded-corpus-no-acked-loss",
       "key": "crash-harness/seeded-corpus-no-acked-loss",
       "matched_test": "TestSeededCorpusNoAckedLoss",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -161,9 +161,9 @@
       "case": "kill-points-are-spread",
       "key": "crash-harness/kill-points-are-spread",
       "matched_test": "TestKillPointsAreSpread",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:08:24.173Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -172,9 +172,9 @@
       "case": "seed-reproduces-failure",
       "key": "crash-harness/seed-reproduces-failure",
       "matched_test": "TestSeedReproducesFailure",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -183,9 +183,9 @@
       "case": "corpus-size-floor",
       "key": "crash-harness/corpus-size-floor",
       "matched_test": "TestCorpusSizeFloor",
-      "failed_at": "2026-08-31T02:28:48.609Z",
-      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:08:24.173Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -194,9 +194,9 @@
       "case": "crash-corpus-recovery-is-deterministic",
       "key": "crash-harness/crash-corpus-recovery-is-deterministic",
       "matched_test": "TestCrashCorpusRecoveryIsDeterministic",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:08:24.173Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -205,9 +205,9 @@
       "case": "acked-write-survives-a-power-cut",
       "key": "simulated-disk/acked-write-survives-a-power-cut",
       "matched_test": "TestAckedWriteSurvivesASimulatedPowerCut",
-      "failed_at": "2026-08-31T04:44:33.486Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -216,9 +216,9 @@
       "case": "checkpointed-state-survives-a-power-cut",
       "key": "simulated-disk/checkpointed-state-survives-a-power-cut",
       "matched_test": "TestCheckpointedStateSurvivesASimulatedPowerCut",
-      "failed_at": "2026-08-31T04:41:08.074Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -227,9 +227,9 @@
       "case": "torn-page-is-truncated-away-before-the-next-write",
       "key": "simulated-disk/torn-page-is-truncated-away-before-the-next-write",
       "matched_test": "TestATornPageLeavesEveryAcknowledgedWriteRecoverable",
-      "failed_at": "2026-08-31T04:47:18.912Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -238,9 +238,9 @@
       "case": "new-segments-directory-entry-is-made-durable",
       "key": "simulated-disk/new-segments-directory-entry-is-made-durable",
       "matched_test": "TestANewSegmentsDirectoryEntryIsMadeDurable",
-      "failed_at": "2026-08-31T04:44:33.486Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -249,9 +249,9 @@
       "case": "broken-build-fails-the-power-cut-test",
       "key": "simulated-disk/broken-build-fails-the-power-cut-test",
       "matched_test": "TestTheBrokenBuildFailsThePowerCutTest",
-      "failed_at": "2026-08-31T04:27:41.138Z",
-      "contract_hash": "2451ca624050e3f4655356a734649de6f3fbce60b1083401a6ab55a32f5f2d15",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -260,9 +260,9 @@
       "case": "replayed-findings-are-in-a-stable-order",
       "key": "crash-harness/replayed-findings-are-in-a-stable-order",
       "matched_test": "TestReplayedFindingsAreInAStableOrder",
-      "failed_at": "2026-08-31T04:33:51.158Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:08:24.173Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     },
     {
@@ -271,9 +271,97 @@
       "case": "every-recovery-shape-is-tallied",
       "key": "crash-harness/every-recovery-shape-is-tallied",
       "matched_test": "TestEveryRecoveryShapeIsTallied",
-      "failed_at": "2026-08-31T04:33:51.158Z",
-      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
-      "gate_command": "go test ./...",
+      "failed_at": "2026-08-31T07:08:24.173Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "checkpoint-still-bounds-the-log-after-a-power-cut",
+      "key": "simulated-disk/checkpoint-still-bounds-the-log-after-a-power-cut",
+      "matched_test": "TestACheckpointStillBoundsTheLogAfterAPowerCut",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "failed-sync-never-acknowledges",
+      "key": "simulated-disk/failed-sync-never-acknowledges",
+      "matched_test": "TestAFailedSyncNeverProducesAnAcknowledgement",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "short-write-never-acknowledges",
+      "key": "simulated-disk/short-write-never-acknowledges",
+      "matched_test": "TestAShortWriteNeverProducesAnAcknowledgement",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "failed-segment-reopens-and-resumes",
+      "key": "simulated-disk/failed-segment-reopens-and-resumes",
+      "matched_test": "TestAStoreWhoseSegmentFailedReopensAndResumes",
+      "failed_at": "2026-08-31T07:04:07.793Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "power-cut-anywhere-in-the-checkpoint-path-loses-nothing",
+      "key": "simulated-disk/power-cut-anywhere-in-the-checkpoint-path-loses-nothing",
+      "matched_test": "TestAPowerCutAnywhereInTheCheckpointPathLosesNothing",
+      "failed_at": "2026-08-31T07:07:08.035Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "recovery-read-failure-is-not-the-end-of-the-log",
+      "key": "simulated-disk/recovery-read-failure-is-not-the-end-of-the-log",
+      "matched_test": "TestARecoveryReadFailureIsReportedRatherThanTakenAsTheEndOfTheLog",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "create-refuses-a-name-that-exists",
+      "key": "simulated-disk/create-refuses-a-name-that-exists",
+      "matched_test": "TestCreatingAFileThatAlreadyExistsFails",
+      "failed_at": "2026-08-31T07:01:39.326Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "checkpoint-is-durable-as-soon-as-it-is-installed",
+      "key": "simulated-disk/checkpoint-is-durable-as-soon-as-it-is-installed",
+      "matched_test": "TestTheCheckpointIsDurableAsSoonAsItIsInstalled",
+      "failed_at": "2026-08-31T07:07:08.035Z",
+      "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
+      "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
     }
   ]

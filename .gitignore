@@ -15,3 +15,4 @@
 # Crash directories preserved by a failing corpus seed. CI uploads them;
 # locally they are wreckage worth keeping until the bug is found.
 /crash-failures/
+/crashtest/crash-failures/

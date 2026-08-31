@@ -146,6 +146,8 @@ power can go in the middle of a multi-step operation.
 | a superseded segment comes back: the unlink reverted | `TestACheckpointStillBoundsTheLogAfterAPowerCut` |
 | the installed checkpoint is not there: the rename reverted | `TestTheCheckpointIsDurableAsSoonAsItIsInstalled` |
 | fsync returns EIO; a write takes ten bytes and stops | `TestAFailedSyncNeverProducesAnAcknowledgement` |
+| a segment that stopped accepting writes, reopened | `TestAStoreWhoseSegmentFailedReopensAndResumes` |
+| the power out at each of the ten calls a checkpoint makes | `TestAPowerCutAnywhereInTheCheckpointPathLosesNothing` |
 
 All but one fail when the line they are about is removed, and those builds are
 commits here rather than claims on this page. The exception is the out-of-order
