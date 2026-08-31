@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,14 +128,7 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 	}
 
 	var tally crashtest.Tally
-	t.Cleanup(func() {
-		rec := tally.Reconcile(seeds)
-		if !rec.OK {
-			t.Errorf("%s", rec)
-			return
-		}
-		t.Log(rec)
-	})
+	t.Cleanup(func() { reportReconciliation(t, tally.Reconcile(seeds)) })
 
 	// The other way a seed goes unobserved: the package runs out of time before
 	// the seed is started. A seed that has not been started cannot be bounded by
@@ -152,7 +146,14 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 			t.Parallel()
 			if deadline, ok := t.Deadline(); ok {
 				if left := time.Until(deadline); left < ceiling {
-					tally.NoObservation(seed, fmt.Sprintf("never attempted: %s left before the package deadline, less than the %s one seed can take", left.Round(time.Second), ceiling))
+					// Deliberately accounted for by NOT accounting for it.
+					// This seed is never started, so it belongs in
+					// Unattempted, and calling NoObservation here would file
+					// it as attempted - a report reading "0 never attempted"
+					// above a reason that begins "never attempted" is the
+					// exact defect this whole mechanism is about.
+					t.Logf("not started: %s left before the package deadline, less than the %s one seed can take",
+						left.Round(time.Second), ceiling)
 					return
 				}
 			}
@@ -174,6 +175,86 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 					res, res.Failures, seed, where)
 			}
 		})
+	}
+}
+
+// reportReconciliation is the corpus's decision about its own coverage, and it
+// is a decision rather than a print: a run that did not cover the corpus FAILS
+// here. That is the link between the tally and the README's claim that a short
+// run says so, and it is one line, which is why it is worth extracting - a line
+// nothing can reach is a line nothing has checked.
+func reportReconciliation(tb testing.TB, rec crashtest.Reconciliation) {
+	tb.Helper()
+	if !rec.OK {
+		tb.Errorf("%s", rec)
+		return
+	}
+	// Printed on the green path too. The corpus's claim is a number of
+	// observations, and a number that only appears when something went wrong is
+	// not evidence that anything went right.
+	tb.Logf("%s", rec)
+}
+
+// recordingTB captures what reportReconciliation did with a TB instead of
+// doing it. Embedding *testing.T is what makes it a testing.TB at all - the
+// interface has an unexported method precisely so that it cannot be
+// implemented from outside - and Errorf and Logf are shadowed, so the calls
+// under test are recorded rather than applied to the running test.
+type recordingTB struct {
+	*testing.T
+	errored bool
+	logged  bool
+	last    string
+}
+
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.errored = true
+	r.last = fmt.Sprintf(format, args...)
+}
+
+func (r *recordingTB) Logf(format string, args ...any) {
+	r.logged = true
+	r.last = fmt.Sprintf(format, args...)
+}
+
+// A guard, not a probe: this behaviour was written inline in the corpus test
+// above and already held, so there is no implementation it catches that did
+// not exist. It is here because it is the one link in the chain that the tally
+// tests do not reach - they prove Reconcile says a run went short, and this
+// proves the corpus does something about being told.
+//
+// What it does not establish: that t.Errorf inside t.Cleanup fails the
+// package. That is the standard library's guarantee and nothing here re-proves
+// it.
+func TestAShortCorpusFailsRatherThanReportingItsSize(t *testing.T) {
+	var short crashtest.Tally
+	short.Observe(11)
+
+	got := &recordingTB{T: t}
+	reportReconciliation(got, short.Reconcile([]uint64{11, 22}))
+
+	if !got.errored {
+		t.Error("a run that reached one of two seeds was not reported as a failure - the corpus would have gone green one observation short")
+	}
+	if got.logged {
+		t.Errorf("a short run was logged rather than failed: %s", got.last)
+	}
+	if !strings.Contains(got.last, "22") {
+		t.Errorf("the failure does not name the seed that went unrun, so nobody can re-run it:\n%s", got.last)
+	}
+
+	var full crashtest.Tally
+	full.Observe(11)
+	full.Observe(22)
+
+	complete := &recordingTB{T: t}
+	reportReconciliation(complete, full.Reconcile([]uint64{11, 22}))
+
+	if complete.errored {
+		t.Errorf("a complete run was reported as a failure: %s", complete.last)
+	}
+	if !complete.logged {
+		t.Error("a complete run printed nothing; the reconciliation line is the evidence that it was complete, and it has to be in the log on the green path or it is only ever seen by someone already looking at a failure")
 	}
 }
 

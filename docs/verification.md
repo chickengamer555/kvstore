@@ -357,7 +357,7 @@ is durable and five of those ten fail, naming the keys that went.
 ## Red proofs
 
 Every case in `verify/kvstore.task.json` was observed failing before it passed,
-with three declared exceptions listed at the end of this section, and the record
+with five declared exceptions listed at the end of this section, and the record
 is committed in
 `.general-harness/redproof.json` - the test name that failed, when, and against
 which version of the contract. A test that has never been seen to fail has not
@@ -395,6 +395,18 @@ a defect, and the price of it is this campaign, which is about half an hour of
 the gate running against a deliberately broken tree. Runs are ordered broad
 first and narrow last on purpose, because the ledger keeps the *last* recording
 for each case.
+
+**Where the ledger stands now.** The contract gained five cases after that
+campaign - four probes for the corpus reconciliation and one guard - so the hash
+moved again, to `430c7b36`. The four new probes were observed failing against
+that hash and carry proofs recorded under it. The thirty-eight from the campaign
+below do not: they read as proven against the previous contract, which is what
+`general-verify` reports as *proven against an older contract* rather than as
+missing, and it is accurate. Nothing they cover changed - `git log -p` over
+`verify/kvstore.task.json` shows every edit since the campaign is additive - but
+re-establishing them means running the campaign again, and that has not been
+done. Read the table below as the record of how those proofs were obtained, not
+as their current hash.
 
 | what was broken | cases whose proof finally came from this run |
 |---|---|
@@ -493,7 +505,7 @@ are here:
 | `f.Sync()` after the truncation in `reopenSegment` | nothing. The next append's fsync promotes the staged length anyway, so the only window is a store that recovers from a tear and then crashes without writing - and that crash loses nothing, because recovery truncates again. |
 | `fsys.syncDir()` after removing unreachable segments (`store.go`) | nothing. Those segments hold no record recovery can reach *in the case that produces them* - a torn tail in the newest segment, which is what a power cut leaves. The qualifier was missing when this row was written and it matters: a segment beyond a *gap* is perfectly readable, and recovery declines to reach it by choice. See the last section. |
 
-Four contract cases are declared guards rather than probes, which means they
+Five contract cases are declared guards rather than probes, which means they
 carry no red proof and are never counted as proven:
 
 - the out-of-order flush test, because this store never had a scanning recovery
@@ -508,6 +520,12 @@ carry no red proof and are never counted as proven:
   it costs is ten acknowledged records. It pins today's behaviour so that no
   argument can lean on the unlink order again without saying what the order is
   worth.
+- the short-corpus test, which is new. It pins the link between the corpus
+  reconciliation and the corpus failing - given a run that did not add up, the
+  test fails and names the seeds that went unrun. The behaviour was written
+  inline in the corpus test and already held, so extracting it made it reachable
+  and catches no implementation that ever shipped. It was checked in both
+  directions all the same: deleting the failure branch turns it red.
 
 Manufacturing a red for any of them would be manufacturing evidence.
 
