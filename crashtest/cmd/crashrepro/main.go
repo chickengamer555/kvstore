@@ -45,6 +45,7 @@ func main() {
 	replay := flag.String("replay", "", "re-check a crash directory preserved by a failing run: same bytes, same verdict, every time")
 	keep := flag.String("dir", "", "keep the crashed store in this directory instead of a temporary one")
 	writeCorpus := flag.String("write-corpus", "", "regenerate the seed corpus into this file and exit")
+	failures := flag.String("failure-dir", "crash-failures", "where to preserve the crashed directory if the seed fails")
 	shapes := flag.Bool("corpus-shapes", false, "run the whole corpus and print where the kills actually landed")
 	workers := flag.Int("workers", runtime.NumCPU(), "children to run at once with -corpus-shapes")
 	flag.Parse()
@@ -113,9 +114,22 @@ func main() {
 	}
 
 	report(res, dir)
-	if !res.OK() {
+	if res.OK() {
+		return
+	}
+
+	// The run that just failed holds the only copy of these bytes, and the
+	// temporary directory is about to be deleted. Keep it: re-running this seed
+	// reproduces the failure about half the time, and replaying the wreckage
+	// reproduces it every time.
+	caseDir, perr := res.Preserve(*failures)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, "could not preserve the failing case:", perr)
 		os.Exit(1)
 	}
+	fmt.Printf("preserved     %s\n", caseDir)
+	fmt.Printf("replay it     go run ./crashtest/cmd/crashrepro -replay %s\n", caseDir)
+	os.Exit(1)
 }
 
 func report(res crashtest.Result, dir string) {
