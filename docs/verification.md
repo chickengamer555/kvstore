@@ -81,6 +81,36 @@ The corpus itself is generated, not chosen: `crashtest/corpus.txt` is
 splitmix64 from a stated origin, and `TestCorpusSizeFloor` recomputes it and
 compares. A seed that started failing cannot be quietly deleted from the file.
 
+## The test cache, and one thing I could not reproduce
+
+Go caches test results, and both negative controls in this repository shell out
+to a build the test binary does not otherwise depend on - so the file that makes
+the control a control is not an input to the package under test, and `go test`
+will serve a stale pass after it has been disarmed. That was found the hard way
+and each control now reads the source it depends on, which is what registers it.
+
+Two things changed this turn. The harness gate is `go test -count=1 ./...`
+rather than `go test ./...`, matching what CI has always used; a gate that can
+pass from cache is a gate nobody should trust. And `buildBrokenChild` reads
+`crashtest/cmd/crashrepro/main.go` as well as `walpolicy_earlyack.go`, because
+it registered the file the build tag swaps in and not the program the tag is
+applied to.
+
+The second of those I have not been able to demonstrate. The report I was
+working from is that modifying `main.go` and re-running `go test ./crashtest/`
+returned `(cached)`. After the change I ran that command four times on this
+machine - once cold with `-count=1`, once warm, once with a comment line
+appended to `main.go`, and once more with nothing changed - and every run
+executed in full, between 152 and 155 seconds, with none reporting `(cached)`.
+So this package does not appear to be cacheable here at all at the moment, and I
+could not stage the state the fix is for.
+
+The fix is still right: making the cache key depend on the file the test
+compiles is what stops a stale pass, whether or not I can currently produce one.
+But it is a precaution I have not watched fire, which is a weaker thing than
+everything else on this page, and it is written down here rather than left to
+look like a verified result.
+
 ## Reproducing a failure
 
 Two different claims, and only one of them is exact.
