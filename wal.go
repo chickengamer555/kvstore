@@ -127,11 +127,16 @@ func reopenSegment(fsys fileSystem, base uint64, seq uint64, crc uint32, validBy
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: reopening log segment: %w", err)
 	}
-	// DELIBERATELY DELETED for this commit: the truncation back to validBytes,
-	// and with it the seek. The segment is reopened at its full length, so the
-	// next record is appended after the torn tail. Restored in the next commit.
-	_ = validBytes
-	return &wal{fsys: fsys, base: base, name: name, path: path, f: f, seq: seq, crc: crc, bytes: size, wrote: size, trace: trace}, nil
+	if size != validBytes {
+		if err := f.Truncate(validBytes); err != nil {
+			return nil, joinClose(fmt.Errorf("kvstore: truncating torn tail: %w", err), f)
+		}
+		if err := f.Sync(); err != nil {
+			return nil, joinClose(fmt.Errorf("kvstore: syncing after truncation: %w", err), f)
+		}
+		trace2(trace, "truncate", fmt.Sprintf("%s:%d->%d", path, size, validBytes))
+	}
+	return &wal{fsys: fsys, base: base, name: name, path: path, f: f, seq: seq, crc: crc, bytes: validBytes, wrote: validBytes, trace: trace}, nil
 }
 
 func trace2(trace func(string, string), name, detail string) {
