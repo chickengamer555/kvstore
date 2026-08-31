@@ -58,9 +58,17 @@ func TestATallyThatIsMissingAnObservationCannotPrintACompleteCorpus(t *testing.T
 // is the only thing anyone wants at that point. The whole argument for this
 // corpus is that a failure names the seed that caused it.
 func TestATallyNamesTheSeedsItNeverAttempted(t *testing.T) {
-	corpus := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	// 101..110 rather than 1..10, and the loop below reads the names LINE
+	// rather than the whole report. Both are the same fix for the same hole,
+	// found by a critic: with seeds 1..10 the header on its own - "10 seeds in
+	// the corpus, 1 observation made, 0 attempted ..., 9 never attempted" -
+	// contains "9" and contains "10", so two of the nine name assertions passed
+	// against the header and never touched the names line. namesShown is the
+	// one part of this report that can silently drop an identity, and this is
+	// the only test that looks at the line it drops them from.
+	corpus := []uint64{101, 102, 103, 104, 105, 106, 107, 108, 109, 110}
 	var tally crashtest.Tally
-	tally.Observe(1)
+	tally.Observe(101)
 
 	rec := tally.Reconcile(corpus)
 	if rec.OK {
@@ -73,9 +81,18 @@ func TestATallyNamesTheSeedsItNeverAttempted(t *testing.T) {
 	if !strings.Contains(report, "never attempted") {
 		t.Errorf("the report does not say that any seed was never attempted:\n%s", report)
 	}
+	names := ""
+	for _, line := range strings.Split(report, "\n") {
+		if strings.Contains(line, "never attempted:") {
+			names = line
+		}
+	}
+	if names == "" {
+		t.Fatalf("the report has no line naming the unattempted seeds, only a count:\n%s", report)
+	}
 	for _, seed := range corpus[1:] {
-		if !strings.Contains(report, fmt.Sprint(seed)) {
-			t.Errorf("the report does not name seed %d, so it cannot be re-run:\n%s", seed, report)
+		if !strings.Contains(names, fmt.Sprint(seed)) {
+			t.Errorf("the names line does not name seed %d, so it cannot be re-run: %s", seed, names)
 		}
 	}
 }
