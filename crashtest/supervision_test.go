@@ -192,6 +192,41 @@ func TestAChildThatNeverAcknowledgesIsGivenUpOnAndCounted(t *testing.T) {
 			t.Errorf("the message does not contain %q: %v", want, err)
 		}
 	}
+
+	// Which clock ran out, not just what the child did. Idle is 1s and Wall is
+	// 30s here, so the only bound that can have fired is the idle one, and the
+	// sentence has to say so. Without this the two branches are
+	// interchangeable: a build that emitted the wall-clock sentence on the idle
+	// path would satisfy every assertion above, and the whole point of 318059e
+	// is that the message names the clock it measured.
+	assertNamesTheClock(t, err.Error(), idleClock)
+}
+
+// The two sentences the harness gives up with, and the assertion that they are
+// not interchangeable.
+//
+// This exists because the assertions above it were all satisfiable by the wrong
+// branch. Every one of them looks at what the CHILD did - how many
+// acknowledgements, which kill point - and both branches carry that. What
+// distinguishes them is the subject of the sentence, and only these two
+// fragments carry it.
+const (
+	idleClock = "no acknowledgement for"
+	wallClock = "still short of its kill point"
+)
+
+func assertNamesTheClock(t *testing.T, msg, want string) {
+	t.Helper()
+	other := wallClock
+	if want == wallClock {
+		other = idleClock
+	}
+	if !strings.Contains(msg, want) {
+		t.Errorf("the message does not name the clock that ran out: want it to contain %q, got: %s", want, msg)
+	}
+	if strings.Contains(msg, other) {
+		t.Errorf("the message names the OTHER clock, %q, which is a false statement about which bound fired: %s", other, msg)
+	}
 }
 
 // B5, and the false statement of fact. A child that is acknowledging steadily
@@ -241,6 +276,16 @@ func TestAChildThatIsStillAcknowledgingIsNotReportedAsSilent(t *testing.T) {
 	if !strings.Contains(msg, "acknowledged") || !strings.Contains(msg, fmt.Sprint(killPoint)) {
 		t.Errorf("the message names neither what the child did nor what it was waiting for; a reader cannot tell slow from hung: %v", err)
 	}
+
+	// Wall is 3s and Idle is 2s, and the child acknowledges every 20ms, so the
+	// idle timer is reset roughly a hundred times before the wall clock runs
+	// out. This is the assertion the fix at 318059e actually exists for. Every
+	// assertion above it is satisfied by a build that says "no acknowledgement
+	// for 2s" here - which contains "acknowledged", contains the kill point,
+	// and contains neither "no output" nor "0 acknowledged" - about a child
+	// that acknowledged a hundred and fifty times. That is the same false
+	// statement of fact as the one being fixed, one word shorter.
+	assertNamesTheClock(t, msg, wallClock)
 }
 
 // holderCopy stages the grandchild: a copy of this test binary, and the
