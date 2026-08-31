@@ -220,6 +220,17 @@
       "contract_hash": "23731c143a96aef97d9f8ba7f0db83d75c5069b2ac7cefdaa3704eb737981462",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "torn-page-is-truncated-away-before-the-next-write",
+      "key": "simulated-disk/torn-page-is-truncated-away-before-the-next-write",
+      "matched_test": "TestATornPageLeavesEveryAcknowledgedWriteRecoverable",
+      "failed_at": "2026-08-31T04:07:38.503Z",
+      "contract_hash": "96316dae40dfbb7d512585803e5858707b102566e1a09d1626ab816468de3eeb",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
