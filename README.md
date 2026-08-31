@@ -229,6 +229,15 @@ Deliberate, and none of them are on a roadmap.
   write to the store's directory. A whole log segment lifted from a different
   store at a matching boundary is accepted, and there is a test that does it
   and records the result.
+- **A store directory with a hole in it opens, and loses what is above the
+  hole.** Recovery stopping at a missing segment rather than closing over it is
+  the guarantee, and it has a test. What happens next is that the segments it
+  declined to reach are deleted, so acknowledged writes that were still
+  perfectly readable are gone. This store does not produce such a directory -
+  it unlinks oldest first and syncs afterwards - but a lost file does, and the
+  cost is measured rather than assumed:
+  `TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites`, ten records,
+  no crash involved.
 - **The oracle and the implementation have the same author.** A model check
   catches divergence from the author's understanding of correctness, not from a
   specification - weaker evidence than an external suite like `toml-test`, and
