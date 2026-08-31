@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/chickengamer555/kvstore"
 	"github.com/chickengamer555/kvstore/crashtest"
@@ -101,6 +102,18 @@ func TestCorpusSizeFloor(t *testing.T) {
 
 // B5, and through it B1, B3 and B4. Every seed forks a child, kills it at a
 // randomised offset and checks the wreckage.
+//
+// What this reports is OBSERVATIONS, not attempts, and the difference is the
+// point. A seed the harness gives up on has no findings, so it fails nothing;
+// before the tally it was simply absent from a run that then printed the size
+// of the corpus underneath it. Two seeds did exactly that in run 33374624703,
+// and what came out was a twenty-minute package timeout with a goroutine dump
+// under it - no failing seed, nothing named, nothing to fix.
+//
+// So every seed ends in exactly one of Observe or NoObservation, the two are
+// reconciled against the size of the corpus after the last subtest has
+// finished, and a run that does not add up fails here. The line it prints is
+// the honest version of "240 seeds ran".
 func TestSeededCorpusNoAckedLoss(t *testing.T) {
 	child := selfExe(t)
 	seeds := corpus(t)
@@ -113,13 +126,42 @@ func TestSeededCorpusNoAckedLoss(t *testing.T) {
 		t.Fatalf("corpus holds %d seeds, floor is %d - nothing below the floor is evidence", len(seeds), crashtest.CorpusFloor)
 	}
 
+	var tally crashtest.Tally
+	t.Cleanup(func() {
+		report, ok := tally.Reconcile(len(seeds))
+		if !ok {
+			t.Errorf("%s", report)
+			return
+		}
+		t.Log(report)
+	})
+
+	// The other way a seed goes unobserved: the package runs out of time before
+	// the seed is started. A seed that has not been started cannot be bounded by
+	// the harness, so the deadline is checked here instead - and what would have
+	// been a timeout that names nothing becomes a reconciliation that names
+	// every seed it did not reach.
+	ceiling := crashtest.DefaultSupervision().Ceiling()
+	if deadline, ok := t.Deadline(); ok {
+		t.Logf("package deadline in %s; a seed is not started with less than %s left, which is the longest the harness can spend on one",
+			time.Until(deadline).Round(time.Second), ceiling)
+	}
+
 	for _, seed := range seeds {
 		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
 			t.Parallel()
+			if deadline, ok := t.Deadline(); ok {
+				if left := time.Until(deadline); left < ceiling {
+					tally.NoObservation(seed, fmt.Sprintf("never attempted: %s left before the package deadline, less than the %s one seed can take", left.Round(time.Second), ceiling))
+					return
+				}
+			}
 			res, err := crashtest.RunSeed(child, seed, t.TempDir())
 			if err != nil {
-				t.Fatalf("harness error on seed %d: %v", seed, err)
+				tally.NoObservation(seed, err.Error())
+				t.Fatalf("seed %d produced no observation: %v", seed, err)
 			}
+			tally.Observe(seed)
 			if !res.OK() {
 				// Keep the wreckage. Re-running the seed reproduces the
 				// failure most of the time; replaying these exact bytes

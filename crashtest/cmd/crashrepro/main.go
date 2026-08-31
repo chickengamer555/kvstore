@@ -187,7 +187,10 @@ func corpusShapes(child crashtest.Child, workers int) error {
 	// one - the reader would have to infer it from a missing line, which is
 	// indistinguishable from the classifier having stopped firing.
 	counts := crashtest.NewShapeCounts()
-	harnessErrors := 0
+	// And the same argument one level up. The shape rows say what the seeds
+	// that produced an observation landed on; this says how many seeds produced
+	// one, which is the denominator the whole table is read against.
+	var tally crashtest.Tally
 	checkpointed, failed := 0, 0
 
 	work := make(chan uint64)
@@ -199,21 +202,26 @@ func corpusShapes(child crashtest.Child, workers int) error {
 			for seed := range work {
 				dir, err := os.MkdirTemp("", "kvshapes-")
 				if err != nil {
+					// Dropping this used to lose the seed silently, which is
+					// the same defect the tally exists to close, in the one
+					// place that knows the reason.
+					tally.NoObservation(seed, "no working directory: "+err.Error())
 					continue
 				}
 				res, runErr := crashtest.RunSeed(child, seed, dir)
+				if runErr != nil {
+					tally.NoObservation(seed, runErr.Error())
+					_ = os.RemoveAll(dir)
+					continue
+				}
+				tally.Observe(seed)
 				mu.Lock()
-				switch {
-				case runErr != nil:
-					harnessErrors++
-				default:
-					counts.Add(res)
-					if res.Report.UsedCheckpoint {
-						checkpointed++
-					}
-					if !res.OK() {
-						failed++
-					}
+				counts.Add(res)
+				if res.Report.UsedCheckpoint {
+					checkpointed++
+				}
+				if !res.OK() {
+					failed++
 				}
 				mu.Unlock()
 				_ = os.RemoveAll(dir)
@@ -228,19 +236,28 @@ func corpusShapes(child crashtest.Child, workers int) error {
 	wg.Wait()
 
 	g := kvstore.Platform()
-	fmt.Printf("| | %d seeds, %s/%s |\n|---|---|\n", len(seeds), runtime.GOOS, runtime.GOARCH)
+	reconciliation, reconciles := tally.Reconcile(len(seeds))
+
+	// The header says how many seeds were OBSERVED, not how many are in the
+	// corpus. Those have been the same number every time this has been run, and
+	// the header said so on the strength of that assumption rather than of the
+	// count - which is the same defect as the zero rows below it, one level up.
+	fmt.Printf("| | %d seeds observed of %d, %s/%s |\n|---|---|\n",
+		tally.Observations(), len(seeds), runtime.GOOS, runtime.GOARCH)
 	for _, row := range counts.Rows() {
 		fmt.Printf("| %s | %d |\n", row.Shape, row.N)
 	}
 	fmt.Printf("| **classified** | **%d** |\n", counts.Total())
 	fmt.Printf("| recovered through a checkpoint | %d |\n", checkpointed)
 	fmt.Printf("| seeds that failed | %d |\n", failed)
-	if harnessErrors > 0 {
-		fmt.Printf("| seeds the harness could not run | %d |\n", harnessErrors)
-	}
+	fmt.Printf("| seeds that produced no observation | %d |\n", len(seeds)-tally.Observations())
+	fmt.Printf("\n%s\n", reconciliation)
 	fmt.Printf("\ndirectory fsync on this build: %v (%s)\n", g.DirSync, g.Platform)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d seeds failed", failed, len(seeds))
+	}
+	if !reconciles {
+		return fmt.Errorf("the corpus did not reconcile: %d observations from %d seeds", tally.Observations(), len(seeds))
 	}
 	return nil
 }
