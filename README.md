@@ -17,7 +17,7 @@ still in the history rather than squashed out of it.
 
 ## What it is
 
-A write-ahead log, a map, and a checkpoint, in 878 non-blank, non-comment
+A write-ahead log, a map, and a checkpoint, in 879 non-blank, non-comment
 lines of Go - the linux/amd64 build set, which is the platform every durability
 claim here is made on. That number is asserted by a test rather than typed. The
 one before it was typed, and it was wrong by three before the day was out.

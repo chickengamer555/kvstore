@@ -173,12 +173,21 @@ func decodeRecord(buf []byte, prevCRC uint32, wantSeq uint64) (record, int, uint
 	if seq != wantSeq {
 		return record{}, 0, prevCRC, errSequence
 	}
-	keyLen := int(binary.LittleEndian.Uint32(buf[17:]))
-	if keyLen > payload {
+	// The same treatment as the length field above, and for the same reason.
+	// Compared as the uint32 it is on disk, against the payload as the uint32
+	// it is on disk, before either is converted. int(0x80000000) is negative
+	// where int is 32 bits, is not greater than any payload, and slices with a
+	// negative bound one line below - a panic inside recovery. Observed, not
+	// theorised: GOARCH=386 panics at record.go:187 on the commit before this
+	// one. The conversion after the comparison cannot overflow, because
+	// claimed is already bounded by maxPayload.
+	claimedKeyLen := binary.LittleEndian.Uint32(buf[17:])
+	if claimedKeyLen > claimed {
 		// The checksum passed, so this is not corruption - it is a record this
 		// build does not understand. Treated the same way regardless: stop.
 		return record{}, 0, prevCRC, errTornRecord
 	}
+	keyLen := int(claimedKeyLen)
 
 	body := buf[headerSize:total]
 	r := record{
