@@ -538,6 +538,18 @@ not produce. It is a log the *format* admits, and `loadDir` should not depend on
 an invariant maintained in `checkpoint.go` for the price of one comparison per
 record.
 
+**A second consequence of the same directory, recorded rather than fixed.** When
+replay stops inside the superseded range, the recovered sequence counter is the
+last record it read - 15 in that test - while the checkpoint claims 30. The next
+record written would take a number the checkpoint already covers, and the
+recovery after that would skip it. The test therefore stops at the reopen and
+does not write. It is not fixed here because the obvious repair - advance the
+counter to the checkpoint's sequence - breaks the within-segment chain, which
+starts at `base+1` and expects consecutive numbers; making it work means moving
+the sequence chain into the segment header, and that is a log format change with
+the 240-seed corpus and CI downstream of it. It is reachable only from the same
+directory the store does not produce.
+
 **`Stats().Syncs` was under-documented rather than wrong.** Checking it against
 the disk's own count turned up a difference: three acknowledged `Put`s, three
 commit fsyncs counted by the store, four fsyncs seen by the disk. The fourth is
