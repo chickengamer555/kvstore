@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/chickengamer555/kvstore"
@@ -144,7 +145,7 @@ func TestCrashCorpusRecoveryIsDeterministic(t *testing.T) {
 		t.Fatal("empty corpus")
 	}
 
-	shapes := map[string]int{}
+	shapes := crashtest.NewShapeCounts()
 	checkpointed := 0
 	for _, seed := range seeds {
 		res, err := crashtest.RunSeed(child, seed, t.TempDir())
@@ -154,12 +155,14 @@ func TestCrashCorpusRecoveryIsDeterministic(t *testing.T) {
 		if !res.OK() {
 			t.Fatalf("%s\n  %v", res, res.Failures)
 		}
-		shapes[shapeOf(res)]++
+		shapes.Add(res)
 		if res.Report.UsedCheckpoint {
 			checkpointed++
 		}
 	}
-	t.Logf("recovery shapes across %d seeds: %v", len(seeds), shapes)
+	for _, row := range shapes.Rows() {
+		t.Logf("  %-62s %d", row.Shape, row.N)
+	}
 
 	// The one thing worth asserting rather than reporting: the corpus has to be
 	// exercising the checkpoint path at all. A corpus of children that all died
@@ -169,20 +172,98 @@ func TestCrashCorpusRecoveryIsDeterministic(t *testing.T) {
 	}
 }
 
-func shapeOf(r crashtest.Result) string {
-	switch {
-	case r.KilledInCheckpointWrite:
-		return "killed-writing-a-checkpoint"
-	case r.Report.CheckpointRejected:
-		return "checkpoint-rejected"
-	case r.Report.Segments > 1:
-		return "killed-between-rotation-and-delete"
-	case r.Report.Skipped > 0:
-		return "killed-before-old-segments-deleted"
-	case r.Report.Stopped != "end-of-log":
-		return "damaged-tail:" + string(r.Report.Stopped)
-	default:
-		return "clean-tail"
+// B4, and the reviewer's question rather than mine. Commit e120adb sorted the
+// recovered snapshot so two replays could be compared byte for byte, and left
+// two other places ranging over a map. This is one of them: verify() built
+// res.Failures by walking the wanted key set, so replaying one preserved crash
+// three times returned the same findings in a different order each time.
+//
+// The old test compared sorted Kinds() and the LENGTH of Failures - never the
+// strings - so it was shaped around the defect instead of catching it. This
+// compares the findings verbatim.
+//
+// The case is staged rather than run: a manifest claiming sixty acknowledged
+// operations over an empty store directory, which is a store that lost
+// everything. That produces plenty of findings in one millisecond and with no
+// child process, and how the directory came to be crashed is irrelevant to
+// whether the report of it is stable.
+func TestReplayedFindingsAreInAStableOrder(t *testing.T) {
+	caseDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(caseDir, "store"), 0o755); err != nil {
+		t.Fatalf("staging the case directory: %v", err)
+	}
+	manifest := "seed 7960286522194355700\nacked 60\nkillAfterAcks 60\ncheckpointBytes 4096\n"
+	if err := os.WriteFile(filepath.Join(caseDir, crashtest.CaseFile), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("writing the case manifest: %v", err)
+	}
+
+	var first []string
+	for attempt := range 5 {
+		res, err := crashtest.ReplayCase(caseDir)
+		if err != nil {
+			t.Fatalf("replay %d: %v", attempt+1, err)
+		}
+		if len(res.Failures) < 10 {
+			t.Fatalf("the staged case produced %d findings; this test needs several before an unstable order could show up at all", len(res.Failures))
+		}
+		if attempt == 0 {
+			first = res.Failures
+			continue
+		}
+		if !slices.Equal(res.Failures, first) {
+			t.Fatalf("replay %d reported the findings in a different order.\n  first:  %v\n  replay: %v\nThe same bytes must produce the same report, or a failure cannot be diffed against a fix.", attempt+1, first, res.Failures)
+		}
+	}
+}
+
+// B5. Every shape the classifier can produce has to appear in the tally,
+// including the ones that did not happen - because the zero rows are the ones
+// the README leans on, and a tally that only holds what occurred cannot print
+// one. A reader checking the claim would get a shorter table and have to infer
+// the zeros from absence, which is indistinguishable from the classifier
+// having quietly stopped firing.
+func TestEveryRecoveryShapeIsTallied(t *testing.T) {
+	shapes := crashtest.Shapes()
+	if len(shapes) < 6 {
+		t.Fatalf("only %d shapes are enumerated: %v", len(shapes), shapes)
+	}
+
+	// Each branch of the classifier, so Shapes() cannot drift away from Shape().
+	produced := map[string]bool{}
+	for _, r := range []crashtest.Result{
+		{KilledInCheckpointWrite: true},
+		{Report: kvstore.RecoveryReport{CheckpointRejected: true, Stopped: "end-of-log"}},
+		{Report: kvstore.RecoveryReport{Segments: 2, Stopped: "end-of-log"}},
+		{Report: kvstore.RecoveryReport{Skipped: 3, Stopped: "end-of-log"}},
+		{Report: kvstore.RecoveryReport{Stopped: "torn-record"}},
+		{Report: kvstore.RecoveryReport{Stopped: "end-of-log"}},
+	} {
+		produced[crashtest.Shape(r)] = true
+	}
+	for _, s := range shapes {
+		if !produced[s] {
+			t.Errorf("shape %q is enumerated but no result produces it", s)
+		}
+	}
+	if len(produced) != len(shapes) {
+		t.Errorf("the classifier produced %d distinct shapes and %d are enumerated", len(produced), len(shapes))
+	}
+
+	// One result in, and every shape still has to come out.
+	counts := crashtest.NewShapeCounts()
+	counts.Add(crashtest.Result{Report: kvstore.RecoveryReport{Stopped: "end-of-log"}})
+	rows := counts.Rows()
+	if len(rows) != len(shapes) {
+		t.Fatalf("the tally printed %d rows for %d shapes - a shape that never happened must still print a zero, or the reader has to infer it from absence", len(rows), len(shapes))
+	}
+	zeros := 0
+	for _, row := range rows {
+		if row.N == 0 {
+			zeros++
+		}
+	}
+	if zeros != len(shapes)-1 {
+		t.Errorf("%d rows are zero, want %d", zeros, len(shapes)-1)
 	}
 }
 

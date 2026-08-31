@@ -107,6 +107,8 @@
         { "id": "kill-points-are-spread", "description": "the corpus kills children at a spread of different points, not the same one every time - a degenerate spread would make the corpus size meaningless", "probe": true, "maps_to_clause": "B5" },
         { "id": "seed-reproduces-failure", "description": "a deliberately unsynced build fails under the harness, prints its seed, and that seed reproduces the identical failure while the honest build passes it", "probe": true, "maps_to_clause": "B5" },
         { "id": "corpus-size-floor", "description": "the recorded corpus is at least 200 seeds and the count is printed", "maps_to_clause": "B5" },
+        { "id": "replayed-findings-are-in-a-stable-order", "test_name": "TestReplayedFindingsAreInAStableOrder", "description": "replaying one preserved crash directory five times produces the identical findings in the identical order, compared verbatim rather than by category and count. The previous test compared sorted Kinds() and len(Failures), which is shaped around the map-order defect instead of catching it", "probe": true, "maps_to_clause": "B4" },
+        { "id": "every-recovery-shape-is-tallied", "test_name": "TestEveryRecoveryShapeIsTallied", "description": "the shape tally prints a row for every shape the classifier can produce, zeros included, and the enumerated set cannot drift away from the classifier. The README leans on three zero rows and the command that is offered as the check could not emit one", "probe": true, "maps_to_clause": "B5" },
         { "id": "crash-corpus-recovery-is-deterministic", "description": "every directory left behind by the corpus replays to byte-identical state twice", "probe": true, "maps_to_clause": "B4" }
       ]
     }

@@ -253,6 +253,28 @@
       "contract_hash": "2451ca624050e3f4655356a734649de6f3fbce60b1083401a6ab55a32f5f2d15",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "replayed-findings-are-in-a-stable-order",
+      "key": "crash-harness/replayed-findings-are-in-a-stable-order",
+      "matched_test": "TestReplayedFindingsAreInAStableOrder",
+      "failed_at": "2026-08-31T04:33:51.158Z",
+      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "every-recovery-shape-is-tallied",
+      "key": "crash-harness/every-recovery-shape-is-tallied",
+      "matched_test": "TestEveryRecoveryShapeIsTallied",
+      "failed_at": "2026-08-31T04:33:51.158Z",
+      "contract_hash": "db0754296eae0380fe9ac7be92b07cc63ad9ac43c9090094c60998db99537aac",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
