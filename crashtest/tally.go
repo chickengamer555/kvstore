@@ -1,8 +1,9 @@
 package crashtest
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -23,12 +24,25 @@ import (
 // total. The rule those three add up to is in docs/verification.md; this type
 // is the mechanical part of it for the corpus.
 //
-// Reconcile hands back the sentence and the verdict in one return, so a caller
-// that prints the sentence has been given the verdict with it.
+// It reconciles SETS, not totals. Every seed in the corpus must be accounted
+// for exactly once, and nothing outside it may be accounted for at all, so two
+// observations of one seed cannot balance against a seed that never ran.
+// Nothing in the corpus can produce that substitution today - each subtest
+// accounts for its own seed exactly once - but that is an argument about the
+// caller, and it is the same argument that was made for counting seeds rather
+// than observations.
+//
+// Reconcile is the only way to obtain the observation count: it comes back
+// inside the same value as the verdict and the seed names, so nobody holds the
+// reassuring number without having been handed the rest of it. That is a claim
+// about this API surface and nothing else, and
+// TestTheObservationCountCannotBeObtainedWithoutTheVerdict pins it. What it
+// does not claim, because nothing here can enforce it, is that a caller prints
+// both halves.
 type Tally struct {
 	mu       sync.Mutex
-	observed int
-	missing  []Missing
+	observed map[uint64]int
+	missing  map[uint64]string
 }
 
 // Missing is one seed that produced no observation, and why.
@@ -42,21 +56,28 @@ type Missing struct {
 func (t *Tally) Observe(seed uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.observed++
+	if t.observed == nil {
+		t.observed = map[uint64]int{}
+	}
+	t.observed[seed]++
 }
 
 // NoObservation records that a seed was attempted and produced nothing.
+//
+// A second, different reason for the same seed is kept alongside the first
+// rather than replacing it. Two accounts of why one seed produced nothing is
+// itself the interesting fact, and the later one is not more trustworthy than
+// the earlier one.
 func (t *Tally) NoObservation(seed uint64, reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.missing = append(t.missing, Missing{Seed: seed, Reason: reason})
-}
-
-// Observations is how many seeds produced a verdict.
-func (t *Tally) Observations() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.observed
+	if t.missing == nil {
+		t.missing = map[uint64]string{}
+	}
+	if prev, seen := t.missing[seed]; seen && prev != reason {
+		reason = prev + "; and again: " + reason
+	}
+	t.missing[seed] = reason
 }
 
 // Reconciliation is the answer to "did this run cover the corpus", together
@@ -67,10 +88,11 @@ type Reconciliation struct {
 	// Corpus is how many seeds the run was reconciled against.
 	Corpus int
 	// Observed is how many of them produced a verdict - pass or fail, both are
-	// observations.
+	// observations. A seed observed twice counts once here and is named in
+	// Repeated, so this can never exceed Corpus.
 	Observed int
 	// Missing is the seeds that were attempted and produced nothing, with the
-	// reason for each.
+	// reason for each, ordered by seed.
 	Missing []Missing
 	// Unattempted is the seeds in the corpus that were never accounted for at
 	// all, named so they can be re-run.
@@ -84,12 +106,73 @@ type Reconciliation struct {
 	OK bool
 }
 
-// String is the line a run prints. It states the numbers first and then, if it
-// does not reconcile, why not and which seeds.
+// Reconcile reports whether the run covered the corpus.
+//
+// Four things have to hold and each is reported separately, because they are
+// four different failures: every seed in the corpus observed, none attempted
+// without producing an observation, none observed twice, and none accounted
+// for that is not in the corpus.
+func (t *Tally) Reconcile(corpus []uint64) Reconciliation {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	inCorpus := make(map[uint64]bool, len(corpus))
+	for _, seed := range corpus {
+		inCorpus[seed] = true
+	}
+
+	rec := Reconciliation{Corpus: len(corpus)}
+	for seed, n := range t.observed {
+		if inCorpus[seed] {
+			rec.Observed++
+		} else {
+			rec.Unexpected = append(rec.Unexpected, seed)
+		}
+		if n > 1 {
+			rec.Repeated = append(rec.Repeated, seed)
+		}
+	}
+	for seed, reason := range t.missing {
+		rec.Missing = append(rec.Missing, Missing{Seed: seed, Reason: reason})
+		if !inCorpus[seed] {
+			rec.Unexpected = append(rec.Unexpected, seed)
+		}
+	}
+	for seed := range inCorpus {
+		_, attempted := t.missing[seed]
+		if t.observed[seed] == 0 && !attempted {
+			rec.Unattempted = append(rec.Unattempted, seed)
+		}
+	}
+
+	// Map iteration order is random, and a report whose lines move between two
+	// runs of the same failure cannot be diffed. Everything printed is ordered.
+	slices.Sort(rec.Unattempted)
+	slices.Sort(rec.Repeated)
+	slices.Sort(rec.Unexpected)
+	rec.Unexpected = slices.Compact(rec.Unexpected)
+	slices.SortFunc(rec.Missing, func(a, b Missing) int { return cmp.Compare(a.Seed, b.Seed) })
+
+	rec.OK = rec.Observed == rec.Corpus &&
+		len(rec.Missing) == 0 &&
+		len(rec.Unattempted) == 0 &&
+		len(rec.Repeated) == 0 &&
+		len(rec.Unexpected) == 0
+	return rec
+}
+
+// namesShown caps how many seed numbers one line prints. A run that reached
+// none of a 240-seed corpus would otherwise print all 240, and what a reader
+// can act on is the count plus enough names to start from. The line says so
+// when it has capped.
+const namesShown = 32
+
+// String is the line a run prints. It states the numbers first, and then, if
+// it does not reconcile, why not and which seeds.
 func (r Reconciliation) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "corpus reconciliation: %d seeds in the corpus, %d observations made, %d attempted and produced no observation, %d never attempted",
-		r.Corpus, r.Observed, len(r.Missing), r.Corpus-r.Observed-len(r.Missing))
+	fmt.Fprintf(&b, "corpus reconciliation: %d seeds in the corpus, %d %s made, %d attempted and produced no observation, %d never attempted",
+		r.Corpus, r.Observed, plural(r.Observed, "observation"), len(r.Missing), len(r.Unattempted))
 	if r.OK {
 		return b.String()
 	}
@@ -97,23 +180,28 @@ func (r Reconciliation) String() string {
 	for _, m := range r.Missing {
 		fmt.Fprintf(&b, "\n  seed %d: %s", m.Seed, m.Reason)
 	}
+	writeSeeds(&b, "never attempted", r.Unattempted)
+	writeSeeds(&b, "observed more than once, so another seed went unrun in its place", r.Repeated)
+	writeSeeds(&b, "accounted for but not in this corpus, so whatever fed this tally and whatever reconciled it disagree about what was run", r.Unexpected)
 	return b.String()
 }
 
-// Reconcile reports whether the run covered the corpus.
-//
-// It compares the number of observations against the size of the corpus, and
-// names the seeds that were attempted and produced nothing. Seeds that were
-// never started at all are counted rather than named, because a package
-// deadline running out is a different fact from a child wedging.
-func (t *Tally) Reconcile(corpus []uint64) Reconciliation {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func writeSeeds(b *strings.Builder, label string, seeds []uint64) {
+	if len(seeds) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n  %d %s %s:", len(seeds), plural(len(seeds), "seed"), label)
+	for _, seed := range seeds[:min(len(seeds), namesShown)] {
+		fmt.Fprintf(b, " %d", seed)
+	}
+	if len(seeds) > namesShown {
+		fmt.Fprintf(b, " ... and %d more", len(seeds)-namesShown)
+	}
+}
 
-	missing := append([]Missing(nil), t.missing...)
-	sort.Slice(missing, func(i, j int) bool { return missing[i].Seed < missing[j].Seed })
-
-	rec := Reconciliation{Corpus: len(corpus), Observed: t.observed, Missing: missing}
-	rec.OK = rec.Observed == rec.Corpus && len(missing) == 0
-	return rec
+func plural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
