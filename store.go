@@ -48,7 +48,17 @@ type Options struct {
 // Stats are counters a caller can use to check the store is doing the work it
 // claims to be doing - most usefully, that there really is one fsync per
 // acknowledgement.
+//
+// They are the store's account of itself and are worth exactly what that is.
+// A test that asserts only on these is asserting that the store agrees with
+// itself; the durability claims in this repository are settled against a
+// simulated platter instead. TestAckedWriteSurvivesASimulatedPowerCut is the
+// one place Syncs is checked against a count taken outside the store.
 type Stats struct {
+	// Syncs counts fsyncs on the log that COMMIT records. The fsync
+	// createSegment performs on a newly created and still empty segment file
+	// is not one of them and is not counted here, so this number is one fewer
+	// than the fsyncs a disk sees per segment.
 	Syncs       int64
 	Records     int64
 	LogBytes    int64

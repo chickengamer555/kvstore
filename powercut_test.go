@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -195,6 +196,19 @@ func TestAckedWriteSurvivesASimulatedPowerCut(t *testing.T) {
 
 	if disk.Syncs() == 0 {
 		t.Fatal("the disk recorded no fsync at all across three acknowledged writes")
+	}
+	// And the store's own counter, checked against the disk's rather than
+	// trusted. Stats().Syncs is narration on its own - a number the store
+	// increments about itself - and durability_test.go asserts on it in two
+	// places with nothing outside the store agreeing.
+	//
+	// The two are not equal, and the difference is what writing this turned
+	// up: the disk records one more fsync than the store counts, because
+	// createSegment fsyncs the empty segment file before a record is in it and
+	// that is not a commit. Three acknowledged Puts, three commit fsyncs, one
+	// segment created. Stats.Syncs now says which of the two it counts.
+	if reported, actual := s.Stats().Syncs, int64(disk.Syncs()); actual != reported+1 {
+		t.Errorf("the store counted %d commit fsyncs and the disk recorded %d altogether; one segment was created here, so the disk should record exactly one more than the store does", reported, actual)
 	}
 
 	reopened := openSim(t, disk)
@@ -597,6 +611,15 @@ func TestTheCheckpointIsDurableAsSoonAsItIsInstalled(t *testing.T) {
 		t.Fatalf("reopening after the power cut: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
+
+	// The platter first. r.UsedCheckpoint below is the reopened store telling
+	// us what it found, and a report field the store fills in about itself is
+	// exactly the kind of evidence this repository has already been caught
+	// leaning on once. This line asks the disk instead, and it is the one that
+	// still fires if someone deletes the two after it.
+	if durable := disk.DurableNames(); !slices.Contains(durable, checkpointName) {
+		t.Errorf("the durable directory after the power cut is %v, with no %s in it - the store had installed one by renaming over the real name, and that rename was never made durable", durable, checkpointName)
+	}
 
 	r := reopened.Recovery()
 	if !r.UsedCheckpoint {

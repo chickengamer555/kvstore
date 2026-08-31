@@ -363,6 +363,17 @@
       "contract_hash": "ed85b2e974108fec491e2d33c1fb74d0c8b68cbd863024619a979ea03a76bfe7",
       "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "checkpoint-never-rotates-away-from-a-failed-segment",
+      "key": "simulated-disk/checkpoint-never-rotates-away-from-a-failed-segment",
+      "matched_test": "TestACheckpointNeverRotatesAwayFromAFailedSegment",
+      "failed_at": "2026-08-31T07:52:33.782Z",
+      "contract_hash": "0b2ffd4aec143c68f8a3c13b4630dc46ab797ebf1ae27e9e133078f5ba8f2cee",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
     }
   ]
 }
