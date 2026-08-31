@@ -119,6 +119,10 @@ type simDisk struct {
 	// issued, rather than at the next syncDir. See PromoteUnlinksEarly.
 	unlinksReachThePlatterImmediately bool
 
+	// metadataIsJournalled makes every create, rename and remove durable as it
+	// is issued, with no syncDir. See JournalMetadata.
+	metadataIsJournalled bool
+
 	syncs    int
 	dirSyncs int
 	crashes  int
@@ -594,7 +598,9 @@ func (s simFS) create(name string) (file, error) {
 		return nil, &os.PathError{Op: "create", Path: name, Err: os.ErrExist}
 	}
 	ino := s.disk.newInoLocked()
-	// A brand new directory entry, and not a durable one until syncDir.
+	// A brand new directory entry, and not a durable one until syncDir -
+	// unless the directory is journalled, where the entry is on the platter
+	// when this returns and syncDir has nothing left to do.
 	s.disk.dirLive[name] = ino
 	s.disk.tick("create")
 	return simFile{disk: s.disk, ino: ino}, nil
@@ -685,6 +691,35 @@ func (d *simDisk) PromoteUnlinksEarly() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.unlinksReachThePlatterImmediately = true
+}
+
+// JournalMetadata switches the directory from the POSIX rule to the NTFS one:
+// a create, rename or remove is on the platter when the call returns, and no
+// syncDir is needed to put it there.
+//
+// The default model is ext4 with data=ordered, where the durability of a name
+// is the application's job - which is what syncdir_unix.go does and what
+// TestANewSegmentsDirectoryEntryIsMadeDurable proves the store performs. NTFS
+// makes it the filesystem's job instead: metadata operations go through the
+// $LogFile transaction log before the operation is reported complete, so the
+// entry is recovered from the journal after a crash. That is the documented
+// reason syncdir_windows.go is a no-op rather than a gap.
+//
+// Until this knob existed that reasoning was a comment and nothing executed
+// it. Every simulated-disk test ran the POSIX rule, so the Windows build's
+// correctness rested on an argument about NTFS that no test could see. This is
+// the seam that lets a test ask the question.
+//
+// What it proves and what it does not: with this set, a store whose syncDir
+// does nothing keeps its acknowledged writes across a power cut. That is the
+// store being correct GIVEN the documented NTFS contract. Whether NTFS honours
+// that contract is not a question any model can answer - it is the same kind
+// of residual as whether the drive honours a flush, which bench/results.md
+// records as unknown for the machine it ran on.
+func (d *simDisk) JournalMetadata() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.metadataIsJournalled = true
 }
 
 // rename moves a directory entry and does not touch the file's data at all,
