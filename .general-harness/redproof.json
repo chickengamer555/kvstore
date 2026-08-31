@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "task": "kvstore",
+      "unit": "framing",
+      "case": "corrupt-byte-ends-recovery",
+      "key": "framing/corrupt-byte-ends-recovery",
+      "matched_test": "TestCorruptByteEndsRecovery",
+      "failed_at": "2026-08-31T02:02:00.736Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "framing",
+      "case": "torn-tail-record-discarded",
+      "key": "framing/torn-tail-record-discarded",
+      "matched_test": "TestTornTailRecordDiscarded",
+      "failed_at": "2026-08-31T02:02:00.736Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "framing",
+      "case": "sequence-break-ends-recovery",
+      "key": "framing/sequence-break-ends-recovery",
+      "matched_test": "TestSequenceBreakEndsRecovery",
+      "failed_at": "2026-08-31T02:02:00.736Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "framing",
+      "case": "absurd-length-field-is-a-torn-tail",
+      "key": "framing/absurd-length-field-is-a-torn-tail",
+      "matched_test": "TestAbsurdLengthFieldIsATornTail",
+      "failed_at": "2026-08-31T02:02:00.736Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    }
+  ]
+}
