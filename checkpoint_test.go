@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -492,4 +493,149 @@ func TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites(t *testing.T) 
 	if _, ok := reopened.Get(gapKey); !ok {
 		t.Errorf("key %q is in the checkpoint that covers records 1..20 and did not come back, so this test is not staging what it says it is", gapKey)
 	}
+}
+
+// B6 and B1, and the closing of a gap this repository had written down and
+// left open.
+//
+// A reviewer reversed the unlink loop in checkpointLocked to newest-first,
+// left the listSegments sort alone, and ran the whole suite plus all 240
+// corpus seeds. Everything stayed green - while three separate comments argue
+// from that order being oldest first. The premise sweep in
+// docs/verification.md had already found the same hole and filed it with the
+// remedy, and then shipped it open.
+//
+// The test above it measures what the wrong order costs from a hand-built
+// directory. That is why the reversal survived: no test made the STORE produce
+// the directory. This one does, from the store's own API and two power cuts,
+// with nothing written by hand.
+//
+//	put 10, checkpoint, power cut at the second syncDir - after the new
+//	segment's name is durable and before a single unlink. That leaves segments
+//	{0, 10} under a checkpoint covering 10, which is a state this store
+//	reaches whenever a machine loses power mid-checkpoint.
+//
+//	reopen, put 10 more, checkpoint again. Now there are TWO segments to
+//	unlink, which is the first time the order can matter at all - and it is
+//	why the crash points in TestAPowerCutAnywhereInTheCheckpointPathLosesNothing
+//	never reached it: that test's checkpoint has exactly one remove.
+//
+//	power cut after the first unlink.
+//
+// Oldest first leaves {10, 20}: a suffix, it abuts, replay reaches the live
+// segment and the recovered sequence counter is 20, level with the checkpoint.
+// Newest first leaves {0, 20}: replay stops at the gap, OpenWith drops segment
+// 20, and the store opens with its counter at 10 while the checkpoint claims
+// 20. Nothing is missing yet - the checkpoint still holds all twenty keys -
+// which is exactly why the suite stayed green. The loss is one write and one
+// reopen later: the next Put takes sequence 11, the checkpoint covers 20, and
+// the recovery after that skips it as superseded. An acknowledged write, gone,
+// with no second crash.
+//
+// So the last two assertions here are the ones that matter, and they are the
+// ones no existing test made. docs/verification.md called this directory - a
+// recovered counter behind the checkpoint - one "the store does not produce".
+// Under the shipped order it still does not. It is one reversed loop away.
+func TestAPowerCutPartWayThroughTheUnlinksKeepsTheCounterLevelWithTheCheckpoint(t *testing.T) {
+	const big = 1 << 20 // nothing checkpoints on its own
+	disk := newSimDisk()
+	open := func() *Store {
+		t.Helper()
+		s, err := OpenWith(Options{Dir: "sim", CheckpointBytes: big, fsys: disk.FS("sim")})
+		if err != nil {
+			t.Fatalf("OpenWith: %v", err)
+		}
+		return s
+	}
+
+	acked := map[string]string{}
+	put := func(s *Store, k, v string) {
+		t.Helper()
+		if err := s.Put(k, []byte(v)); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+		acked[k] = v
+	}
+
+	// First power cut: after the checkpoint is installed and its successor
+	// segment is durable, before any unlink. Leaves two segments where a clean
+	// checkpoint would have left one.
+	s := open()
+	for i := range 10 {
+		put(s, fmt.Sprintf("k%02d", i), fmt.Sprintf("r0-%02d", i))
+	}
+	disk.CrashAtNth("syncdir", 2)
+	if op, cut := runUntilPowerCut(t, func() { _ = s.Checkpoint() }); !cut {
+		t.Fatalf("the first checkpoint never reached the second syncDir; it stopped at %q", op)
+	}
+	if got := segmentBasesOnDisk(t, disk); len(got) != 2 {
+		t.Fatalf("after the first power cut the directory holds segments %v, want two of them - the staging this test needs is a checkpoint whose unlinks never ran", got)
+	}
+
+	// Ten more acknowledged writes, then the checkpoint with two unlinks to do.
+	//
+	// From here the unlinks are durable as they are issued. Without that the
+	// order cannot be observed at all: a crash mid-loop reverts every unlink
+	// at once, so both orders leave all three segments and both recover
+	// identically. See PromoteUnlinksEarly - that blind spot is why the
+	// reversal survived the whole suite.
+	disk.PromoteUnlinksEarly()
+	s = open()
+	for i := 10; i < 20; i++ {
+		put(s, fmt.Sprintf("k%02d", i), fmt.Sprintf("r1-%02d", i))
+	}
+	disk.CrashAtNth("remove", 1)
+	if op, cut := runUntilPowerCut(t, func() { _ = s.Checkpoint() }); !cut {
+		t.Fatalf("the second checkpoint never reached its first remove; it stopped at %q", op)
+	}
+	if got := segmentBasesOnDisk(t, disk); len(got) != 2 {
+		t.Fatalf("after the second power cut the directory holds segments %v, want two - one of the three was unlinked and the power went before the next", got)
+	}
+
+	// Nothing is lost yet under either order, because the checkpoint covers
+	// everything acknowledged so far. This assertion is here to say so: it is
+	// the one the wrong order also passes.
+	reopened := open()
+	for k, v := range acked {
+		if got, ok := reopened.Get(k); !ok || string(got) != v {
+			t.Fatalf("acknowledged key %q = %q, %v immediately after the power cut inside the unlinks; want %q, true", k, got, ok, v)
+		}
+	}
+
+	// The assertion that does the work. The recovered log has to account for
+	// the checkpoint: if replay stopped below it, the counter is behind, and
+	// the next record written takes a number the checkpoint already covers.
+	rep := reopened.Recovery()
+	if rep.LastSeq < rep.CheckpointSeq {
+		t.Errorf("recovery stopped at sequence %d under a checkpoint covering %d, so the log no longer accounts for the checkpoint. The next write takes a number the checkpoint already contains and the recovery after that will skip it. Report: %+v", rep.LastSeq, rep.CheckpointSeq, rep)
+	}
+
+	// And the consequence, measured rather than argued: one more acknowledged
+	// write, one more reopen, is it still there.
+	put(reopened, "after-the-crash", "kept")
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	final := open()
+	defer func() { _ = final.Close() }()
+	for k, v := range acked {
+		if got, ok := final.Get(k); !ok || string(got) != v {
+			t.Errorf("acknowledged key %q = %q, %v after reopening the store that was recovered from the interrupted unlinks; want %q, true", k, got, ok, v)
+		}
+	}
+}
+
+// segmentBasesOnDisk reads the segment bases straight off the simulated
+// platter, so a test can check what a power cut left without opening a store -
+// opening one repairs the directory it opens.
+func segmentBasesOnDisk(t *testing.T, d *simDisk) []uint64 {
+	t.Helper()
+	var out []uint64
+	for _, name := range d.DurableNames() {
+		if base, ok := segmentBase(name); ok {
+			out = append(out, base)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }

@@ -243,7 +243,8 @@ func (s *Store) checkpointLocked() error {
 		return err
 	}
 	removed := 0
-	for _, base := range bases {
+	for i := len(bases) - 1; i >= 0; i-- { // MUTANT: newest first
+		base := bases[i]
 		if base >= seq {
 			continue
 		}

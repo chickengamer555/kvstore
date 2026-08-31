@@ -115,6 +115,10 @@ type simDisk struct {
 	nextIno int
 	crashAt *simCrashPoint
 
+	// unlinksReachThePlatterImmediately makes every remove durable as it is
+	// issued, rather than at the next syncDir. See PromoteUnlinksEarly.
+	unlinksReachThePlatterImmediately bool
+
 	syncs    int
 	dirSyncs int
 	crashes  int
@@ -651,8 +655,36 @@ func (s simFS) remove(name string) error {
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
 	}
 	delete(s.disk.dirLive, name)
+	if s.disk.unlinksReachThePlatterImmediately {
+		delete(s.disk.dirDurable, name)
+		s.disk.collectLocked()
+	}
 	s.disk.tick("remove")
 	return nil
+}
+
+// PromoteUnlinksEarly makes every subsequent remove durable the moment it is
+// issued, instead of at the next syncDir.
+//
+// The default model is that no directory change reaches the platter until
+// syncDir, and for a DURABILITY argument that is the right assumption: it never
+// lets the store take credit for a change it did not sync. For an ORDERING
+// argument it is the wrong one, and wrong in a way that hides things. A real
+// filesystem may write a directory block back whenever it likes, so a power cut
+// part way through a sequence of unlinks can leave any subset of them durable -
+// and which subset is a function of the order they were issued in. The default
+// model cannot stage any of that: a crash mid-loop reverts every unlink at once,
+// so the loop's order has no observable consequence.
+//
+// That is the exact reason reversing the unlink loop in checkpointLocked left
+// the whole suite and all 240 corpus seeds green while three comments argued
+// from the order. Nothing could see it. This knob is what lets a test see it,
+// and it is a knob rather than the default because every other test on this
+// disk is asking the durability question, where assuming less is correct.
+func (d *simDisk) PromoteUnlinksEarly() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.unlinksReachThePlatterImmediately = true
 }
 
 // rename moves a directory entry and does not touch the file's data at all,
