@@ -8,22 +8,39 @@ import (
 	"strings"
 )
 
-// The log is a sequence of numbered segments, LOG.000001 upwards. Only the
-// highest-numbered one is ever written to; the rest are immutable until a
-// checkpoint makes them unnecessary and deletes them.
+// A segment is named for its BASE sequence number: the sequence of the record
+// immediately before its first one. LOG.00000000000000000000 holds records 1
+// upwards, and after a checkpoint at sequence 900 the next segment is
+// LOG.00000000000000000900 and holds 901 upwards.
+//
+// Putting the base in the name rather than in a file header is deliberate.
+// Recovery has to know where a segment starts in the global sequence before it
+// reads a byte of it, because after a checkpoint the earlier segments are gone
+// and there is nothing left to count from. Fixed-width zero padding means
+// lexical order is numeric order, so a plain sort of the directory listing is
+// the replay order.
 const segmentPrefix = "LOG."
 
-func segmentName(n uint32) string { return fmt.Sprintf("%s%06d", segmentPrefix, n) }
+func segmentName(base uint64) string { return fmt.Sprintf("%s%020d", segmentPrefix, base) }
 
-func segmentIndex(name string) (uint32, bool) {
+func segmentBase(name string) (uint64, bool) {
 	if !strings.HasPrefix(name, segmentPrefix) {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(name[len(segmentPrefix):], 10, 32)
+	rest := name[len(segmentPrefix):]
+	if len(rest) != 20 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(rest, 10, 64)
 	if err != nil {
 		return 0, false
 	}
-	return uint32(n), true
+	return n, true
+}
+
+func isSegmentName(name string) bool {
+	_, ok := segmentBase(name)
+	return ok
 }
 
 // wal is the append-only log segment currently being written.
@@ -34,7 +51,7 @@ func segmentIndex(name string) (uint32, bool) {
 // has to read.
 type wal struct {
 	dir     string
-	index   uint32
+	base    uint64
 	path    string
 	f       *os.File
 	seq     uint64
@@ -62,13 +79,13 @@ func (w *wal) emit(name, detail string) {
 // The last step is the one people leave out. Without it the file's contents are
 // durable and the directory entry naming the file is not, so a crash can leave
 // a store whose log exists on disk and has no name - see syncdir_unix.go.
-func createSegment(dir string, n uint32, seq uint64, crc uint32, trace func(string, string)) (*wal, error) {
-	path := filepath.Join(dir, segmentName(n))
+func createSegment(dir string, base uint64, trace func(string, string)) (*wal, error) {
+	path := filepath.Join(dir, segmentName(base))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: creating log segment: %w", err)
 	}
-	w := &wal{dir: dir, index: n, path: path, f: f, seq: seq, crc: crc, trace: trace}
+	w := &wal{dir: dir, base: base, path: path, f: f, seq: base, trace: trace}
 	w.emit("segment-create", path)
 
 	if err := f.Sync(); err != nil {
@@ -93,8 +110,8 @@ func createSegment(dir string, n uint32, seq uint64, crc uint32, trace func(stri
 // where recovery stops, so they would be written, fsynced, acknowledged and
 // then never read again. Cutting the file back to validBytes is what makes the
 // log usable after the crash it was designed to survive.
-func reopenSegment(dir string, n uint32, seq uint64, crc uint32, validBytes int64, trace func(string, string)) (*wal, error) {
-	path := filepath.Join(dir, segmentName(n))
+func reopenSegment(dir string, base uint64, seq uint64, crc uint32, validBytes int64, trace func(string, string)) (*wal, error) {
+	path := filepath.Join(dir, segmentName(base))
 	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: reopening log segment: %w", err)
@@ -115,7 +132,7 @@ func reopenSegment(dir string, n uint32, seq uint64, crc uint32, validBytes int6
 	if _, err := f.Seek(validBytes, 0); err != nil {
 		return nil, joinClose(fmt.Errorf("kvstore: seeking to log tail: %w", err), f)
 	}
-	return &wal{dir: dir, index: n, path: path, f: f, seq: seq, crc: crc, bytes: validBytes, trace: trace}, nil
+	return &wal{dir: dir, base: base, path: path, f: f, seq: seq, crc: crc, bytes: validBytes, trace: trace}, nil
 }
 
 func trace2(trace func(string, string), name, detail string) {

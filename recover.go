@@ -52,28 +52,28 @@ type dirState struct {
 	// active is the segment to append to, and activeBytes is how much of it
 	// recovery was able to vouch for. Anything past that point is a torn tail
 	// and gets truncated away when the segment is reopened.
-	active      uint32
+	active      uint64
 	activeBytes int64
 
 	// drop lists segments after the point recovery stopped. They are
 	// unreachable - the chain that would verify them is broken - so nothing in
 	// them can ever be replayed, and leaving them would only confuse the next
 	// recovery.
-	drop []uint32
+	drop []uint64
 }
 
-func listSegments(dir string) ([]uint32, error) {
+func listSegments(dir string) ([]uint64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: reading store directory: %w", err)
 	}
-	var out []uint32
+	var out []uint64
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		if n, ok := segmentIndex(e.Name()); ok {
-			out = append(out, n)
+		if base, ok := segmentBase(e.Name()); ok {
+			out = append(out, base)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })

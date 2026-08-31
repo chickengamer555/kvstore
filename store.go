@@ -54,6 +54,12 @@ type RecoveryReport struct {
 	Dropped        int
 	CheckpointSeq  uint64
 	UsedCheckpoint bool
+
+	// CheckpointRejected is true when a checkpoint file was present and failed
+	// its checksum, so recovery fell back to replaying the log in full. That is
+	// the expected outcome of a crash during checkpointing and is not an
+	// error - but it is worth being able to see.
+	CheckpointRejected bool
 }
 
 // Store is an embedded key-value store backed by a write-ahead log.
@@ -115,7 +121,7 @@ func OpenWith(opts Options) (*Store, error) {
 	}
 
 	if st.segments == 0 {
-		s.log, err = createSegment(opts.Dir, 1, 0, 0, opts.trace)
+		s.log, err = createSegment(opts.Dir, 0, opts.trace)
 	} else {
 		s.log, err = reopenSegment(opts.Dir, st.active, st.lastSeq, st.lastCRC, st.activeBytes, opts.trace)
 	}

@@ -110,6 +110,39 @@
       "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "checkpoint",
+      "case": "log-bounded-under-sustained-writes",
+      "key": "checkpoint/log-bounded-under-sustained-writes",
+      "matched_test": "TestLogBoundedUnderSustainedWrites",
+      "failed_at": "2026-08-31T02:19:26.845Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "checkpoint",
+      "case": "recovery-after-checkpoint-preserves-acked",
+      "key": "checkpoint/recovery-after-checkpoint-preserves-acked",
+      "matched_test": "TestRecoveryAfterCheckpointPreservesAcked",
+      "failed_at": "2026-08-31T02:19:26.845Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "checkpoint",
+      "case": "partial-checkpoint-is-ignored",
+      "key": "checkpoint/partial-checkpoint-is-ignored",
+      "matched_test": "TestPartialCheckpointIsIgnored",
+      "failed_at": "2026-08-31T02:19:26.845Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
