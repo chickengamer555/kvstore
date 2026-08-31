@@ -266,7 +266,7 @@ func TestPlatformReportsItsDirectorySyncGuaranteeHonestly(t *testing.T) {
 // Group commit, and the property that makes it honest: the whole batch costs
 // one fsync, and nothing in it is acknowledged until that fsync returns.
 //
-// This is the number the README labels as the one that trades away durability
+// This is the number docs/verification.md labels as the one that trades away durability
 // granularity, so the test pins both halves - the saving, and what it costs.
 func TestPutBatchIsOneSyncAndFullyDurable(t *testing.T) {
 	dir := t.TempDir()

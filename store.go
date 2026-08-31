@@ -238,7 +238,7 @@ type Entry struct {
 // leave any prefix of it.
 //
 // That is a real weakening, not a free win, and it is why Put and not PutBatch
-// is what the README's headline number is measured with.
+// is what the headline number in docs/verification.md is measured with.
 func (s *Store) PutBatch(entries []Entry) error {
 	if len(entries) == 0 {
 		return nil

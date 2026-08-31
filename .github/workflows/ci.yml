@@ -53,13 +53,13 @@ jobs:
           fi
 
       # The whole suite, including the full recorded crash corpus. -v so the
-      # measured numbers the README quotes - corpus size, kill-point spread,
-      # recovery shapes, how often the deliberately broken build was caught -
+      # measured numbers docs/verification.md quotes - corpus size, kill-point
+      # spread, recovery shapes, how often the broken build was caught -
       # are in the log rather than only in a claim.
       - name: test
         run: go test -v -count=1 -timeout 20m ./...
 
-      # The distribution the README quotes: not how many times the harness ran,
+      # The distribution docs/verification.md quotes: not how many times it ran,
       # but where the kills actually landed. Linux and Windows should differ
       # here, and the point of printing it is that a reader can check.
       - name: where the kills landed

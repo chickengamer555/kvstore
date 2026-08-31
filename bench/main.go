@@ -1,4 +1,4 @@
-// Command kvbench measures the four numbers the README quotes.
+// Command kvbench measures the four numbers docs/verification.md quotes.
 //
 //	go run ./bench -machine "..." -fs "..." -flush-honoured unknown
 //
