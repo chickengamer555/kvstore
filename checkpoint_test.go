@@ -429,6 +429,13 @@ func copySegments(t *testing.T, dir string) map[string][]byte {
 // repository of that kind, and it is here because it is the measurement behind
 // a premise the documentation was arguing from.
 //
+// It builds its directory by hand, and that turned out to be the weakness: a
+// reviewer reversed the unlink order in checkpointLocked and this test stayed
+// green, because nothing here calls it. TestAPowerCutPartWayThroughTheUnlinks
+// KeepsTheCounterLevelWithTheCheckpoint, at the bottom of this file, is the
+// one that does. Both are worth having - this one isolates what the bad
+// directory costs, that one proves the store can produce it.
+//
 // checkpointLocked deletes superseded segments oldest first and syncs the
 // directory afterwards, so what a crash part way through leaves is a SUFFIX of
 // them. Two arguments lean on that: the one that downgrades the

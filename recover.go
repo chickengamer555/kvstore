@@ -70,10 +70,13 @@ type dirState struct {
 	// its bytes are broken. Deleting it is therefore a choice, and it is the
 	// step that turns a missing file into lost data.
 	// TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites is what
-	// that costs, measured: ten acknowledged records, no crash involved. It
-	// stays for now because refusing to open instead is a behaviour change
-	// with a 240-seed corpus downstream, and it is recorded rather than
-	// quietly true.
+	// that costs, measured from a hand-built directory: ten acknowledged
+	// records, no crash involved. TestAPowerCutPartWayThroughTheUnlinksKeeps
+	// TheCounterLevelWithTheCheckpoint is the same cost reached by the store's
+	// own API, from two power cuts and nothing written by hand, once the
+	// unlink order is reversed. It stays for now because refusing to open
+	// instead is a behaviour change with a 240-seed corpus downstream, and it
+	// is recorded rather than quietly true.
 	drop []uint64
 }
 

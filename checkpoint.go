@@ -243,8 +243,16 @@ func (s *Store) checkpointLocked() error {
 		return err
 	}
 	removed := 0
-	for i := len(bases) - 1; i >= 0; i-- { // MUTANT: newest first
-		base := bases[i]
+	// Oldest first, and it is load-bearing rather than tidy. bases is sorted
+	// ascending, so what a power cut part way through this loop leaves durable
+	// is a SUFFIX of the superseded segments - which abuts the live segment,
+	// which is what lets replay reach it. Leave a prefix instead and replay
+	// stops at the hole, OpenWith drops everything above it, and the store
+	// reopens with its sequence counter behind the checkpoint; the next write
+	// then takes a number the checkpoint already covers and the recovery after
+	// that skips it. TestAPowerCutPartWayThroughTheUnlinksKeepsTheCounterLevel
+	// WithTheCheckpoint reverses this line and loses an acknowledged write.
+	for _, base := range bases {
 		if base >= seq {
 			continue
 		}
