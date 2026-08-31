@@ -500,6 +500,25 @@ func TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites(t *testing.T) 
 	if _, ok := reopened.Get(gapKey); !ok {
 		t.Errorf("key %q is in the checkpoint that covers records 1..20 and did not come back, so this test is not staging what it says it is", gapKey)
 	}
+
+	// The step that turns a missing file into lost data, pinned. Replay
+	// stopping at the hole is a read-only decision; OpenWith then UNLINKS
+	// every segment above the stop point, and after that the records are not
+	// merely unreached, they are gone.
+	//
+	// This assertion is here because a mutation sweep found the line
+	// unguarded: deleting the drop list left the whole root suite and all 240
+	// corpus seeds green (verify/mutants.sh, number 6). It survived because
+	// the shipped store never produces a directory where the list is
+	// non-empty - it stops at torn tails in the LAST segment, where there is
+	// nothing above the stop point. So this is the only place the deletion
+	// happens at all, and it is a record of today's behaviour rather than a
+	// requirement: if OpenWith ever stops unlinking these, that is the
+	// improvement recover.go's comment describes, and this is the assertion to
+	// rewrite.
+	if got := segmentBases(t, dir); len(got) != 1 || got[0] != 0 {
+		t.Errorf("after opening over the gap the directory holds segments %v, want only [0]. OpenWith unlinks what replay could not reach, and that is what makes this loss permanent; if it no longer does, rewrite this assertion rather than deleting it", got)
+	}
 }
 
 // B6 and B1, and the closing of a gap this repository had written down and
