@@ -75,13 +75,15 @@ against it. On that seed it fails, naming the keys it lost.
 **That seed is the best case, not the average one.** Across the first 24 seeds
 of the corpus the same broken build was caught 13 times on Windows and **4 times
 on ubuntu-latest** - the platform this README calls authoritative for every
-durability claim in it. So the corpus misses a store with no `fsync` in it
-twenty times out of twenty-four on the platform that matters, which is not a
-tuning problem: after `Process.Kill` the page cache is intact and the kernel
-writes the data out anyway. The reason to believe a green corpus run means
-anything is the *simulated disk*, where the same broken build fails
-deterministically on every platform. The corpus is evidence about paths, not
-about `fsync`.
+durability claim in it. Twenty of twenty-four seeds let it through, and that is
+not a tuning problem. A store that simply never called `fsync` the corpus cannot
+catch at all, at any number of seeds: after `Process.Kill` the page cache is
+intact and the kernel writes the data out anyway.
+
+So the reason to believe a green corpus run means anything is the *simulated
+disk*, where the same broken build fails deterministically on every platform.
+The corpus is evidence about paths - real handles, real kernel state, a real
+half-finished checkpoint - not about `fsync`.
 
 `-count=1` is not decoration. Without it Go serves a cached pass: on a warm
 checkout `go test ./...` comes back green in well under a second having run
