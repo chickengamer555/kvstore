@@ -348,3 +348,100 @@ func TestAStoreWhoseSegmentFailedReopensAndResumes(t *testing.T) {
 		}
 	}
 }
+
+// B1, B6. The other half of the failed-segment story, and the half that was
+// missing: a segment refusing writes stops the SEGMENT handing out promises it
+// cannot keep, but nothing stopped the STORE walking away from it.
+//
+// checkpointLocked rotates: it writes a checkpoint, creates the next segment,
+// closes the old one, then unlinks the segments the checkpoint superseded. If
+// the live segment has a tail recovery cannot vouch for, closing it returns
+// that stored failure and checkpointLocked returns early - after s.log has
+// already moved to the new segment and before a single unlink. The poisoned
+// segment stays on disk with its torn tail, and the store cheerfully
+// acknowledges writes into a successor that the next recovery classifies as
+// unreachable and OpenWith then deletes.
+//
+// That is an acknowledged write lost with no crash anywhere in the sequence,
+// and it is unrecoverable by hand afterwards, because the successor is not
+// merely unread - it is unlinked and the directory synced.
+//
+// The assertion is on the data, not on the error from Checkpoint: Checkpoint
+// returns an error either way, because closing the failed segment reports the
+// failure whether or not it was allowed to rotate first. What separates the
+// two is whether e and f are still there afterwards.
+func TestACheckpointNeverRotatesAwayFromAFailedSegment(t *testing.T) {
+	disk := newSimDisk()
+	s := openSim(t, disk)
+
+	acked := map[string][]byte{}
+	put := func(st *Store, k, v string) {
+		t.Helper()
+		if err := st.Put(k, []byte(v)); err == nil {
+			acked[k] = []byte(v)
+		}
+	}
+
+	put(s, "a", "one")
+	put(s, "b", "two")
+	if len(acked) != 2 {
+		t.Fatal("a Put failed before anything was injected")
+	}
+
+	seg, err := findSimSegment(disk)
+	if err != nil {
+		t.Fatalf("locating the log segment: %v", err)
+	}
+	disk.FailNext(seg, "writeat", 10, io.ErrShortWrite)
+	if err := s.Put("c", []byte(strings.Repeat("c", 200))); err == nil {
+		t.Fatal("Put returned nil over a short write")
+	}
+
+	// The exported call. A caller that knows it is about to go idle is
+	// invited by the doc comment to make one, and has no way of knowing the
+	// live segment is poisoned.
+	if err := s.Checkpoint(); err == nil {
+		t.Error("Checkpoint returned nil on a store whose live segment had already failed a commit")
+	}
+
+	put(s, "e", "five")
+	put(s, "f", "six")
+
+	if err := s.Close(); err == nil {
+		t.Error("Close returned nil on a segment whose last commit did not complete")
+	}
+
+	reopened, err := OpenWith(Options{Dir: "sim", fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	for k, v := range acked {
+		if got, ok := reopened.Get(k); !ok || !bytes.Equal(got, v) {
+			t.Errorf("acknowledged key %q = %q, %v after a clean reopen; want %q, true - that Put returned nil, so this is data loss, and no crash, torn page or power cut is involved anywhere in this test", k, got, ok, v)
+		}
+	}
+
+	// And the store is not bricked by the refusal: recovery cut the tail away,
+	// so the checkpoint the caller asked for is available again.
+	if err := reopened.Checkpoint(); err != nil {
+		t.Errorf("Checkpoint on the reopened store: %v - refusing to rotate off a poisoned segment must not outlive the segment", err)
+	}
+	put(reopened, "g", "seven")
+	if _, ok := acked["g"]; !ok {
+		t.Fatal("the reopened store would not take a write after checkpointing")
+	}
+	disk.Crash()
+
+	again, err := OpenWith(Options{Dir: "sim", fsys: disk.FS("sim")})
+	if err != nil {
+		t.Fatalf("reopening after the power cut: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Close() })
+	for k, v := range acked {
+		if got, ok := again.Get(k); !ok || !bytes.Equal(got, v) {
+			t.Errorf("acknowledged key %q = %q, %v after the power cut; want %q, true", k, got, ok, v)
+		}
+	}
+}
