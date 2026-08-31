@@ -229,3 +229,90 @@ func assertFullLogReplay(t *testing.T, dir string, want map[string]string) {
 		t.Error("a key that exists only in the damaged checkpoint was returned from Get")
 	}
 }
+
+// The window a crash during checkpointing actually leaves behind: the
+// checkpoint is durable, the new segment exists, and the old segments have not
+// been deleted yet. Recovery then sees records it already has, and the one
+// thing it must not do is re-apply them - a surviving suffix of old records
+// replayed over newer state would overwrite new values with old ones.
+//
+// The auto-checkpoint path deletes the old segments immediately, so this
+// reconstructs the window by hand: snapshot the directory, checkpoint, put the
+// old segments back.
+func TestRecoveryIgnoresRecordsTheCheckpointAlreadyCovers(t *testing.T) {
+	dir := t.TempDir()
+	want := map[string]string{}
+
+	s, err := OpenWith(Options{Dir: dir, CheckpointBytes: 1 << 30})
+	if err != nil {
+		t.Fatalf("OpenWith: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	for i := range 30 {
+		k := fmt.Sprintf("k%02d", i%10)
+		v := fmt.Sprintf("round%d-key%d", i/10, i%10)
+		mustPut(t, s, k, v)
+		want[k] = v
+	}
+	saved := copySegments(t, dir)
+
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	// Writes after the checkpoint, so the old segments carry strictly older
+	// values for the same keys - which is what makes re-application visible.
+	for i := range 10 {
+		k := fmt.Sprintf("k%02d", i)
+		v := fmt.Sprintf("after-checkpoint-%d", i)
+		mustPut(t, s, k, v)
+		want[k] = v
+	}
+
+	clean := snapshotOf(t, dir)
+	for name, content := range saved {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatalf("restoring %s: %v", name, err)
+		}
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopening with the pre-checkpoint segments restored: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	rep := reopened.Recovery()
+	if rep.Skipped == 0 {
+		t.Fatalf("recovery skipped nothing; report was %+v - the restored segments hold %d records the checkpoint already covers", rep, 30)
+	}
+	for k, v := range want {
+		got, ok := reopened.Get(k)
+		if !ok || !bytes.Equal(got, []byte(v)) {
+			t.Errorf("key %q = %q, %v; want %q, true - an old record was re-applied over a newer one", k, got, ok, v)
+		}
+	}
+	if !bytes.Equal(clean, reopened.Snapshot()) {
+		t.Error("recovering with the superseded segments present produced different state from recovering without them")
+	}
+}
+
+func copySegments(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	out := map[string][]byte{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !isSegmentName(e.Name()) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("reading %s: %v", e.Name(), err)
+		}
+		out[e.Name()] = b
+	}
+	return out
+}

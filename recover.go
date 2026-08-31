@@ -80,7 +80,8 @@ func listSegments(dir string) ([]uint64, error) {
 	return out, nil
 }
 
-// loadDir replays the whole directory: every log segment, in order.
+// loadDir replays the whole directory: the checkpoint if there is a usable
+// one, then every log segment, in order.
 //
 // Determinism (clause B4) comes from this function having no inputs but the
 // bytes on disk. There is no map iteration, no time, no randomness and no
@@ -95,23 +96,58 @@ func loadDir(dir string) (*dirState, error) {
 	st := &dirState{data: map[string][]byte{}, segments: len(segs)}
 	st.report.Segments = len(segs)
 
+	ckpt, rejected := loadCheckpoint(dir)
+	st.report.CheckpointRejected = rejected
+	if ckpt != nil {
+		st.data = ckpt.data
+		st.report.CheckpointSeq = ckpt.seq
+		st.report.UsedCheckpoint = true
+	}
+
+	// The log has to account for everything since the checkpoint. If the oldest
+	// surviving segment begins after the checkpoint's sequence number, records
+	// in between exist nowhere: a segment was deleted before the checkpoint
+	// that superseded it was durable, which this store's ordering never does.
+	// Opening anyway would hand back a store that is quietly missing writes.
+	if len(segs) > 0 && segs[0] > st.report.CheckpointSeq {
+		return nil, fmt.Errorf("kvstore: log starts at sequence %d but the checkpoint only covers %d - records %d..%d are in neither",
+			segs[0]+1, st.report.CheckpointSeq, st.report.CheckpointSeq+1, segs[0])
+	}
+
 	crc := uint32(0)
-	seq := st.lastSeq
+	seq := st.report.CheckpointSeq
 	stopAt := -1
 
-	for i, n := range segs {
-		name := segmentName(n)
+	for i, base := range segs {
+		name := segmentName(base)
 		buf, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			return nil, fmt.Errorf("kvstore: reading log segment %s: %w", name, err)
 		}
 
+		if i > 0 && base != seq {
+			// Segments must abut. A gap means a segment went missing, and
+			// closing over it would silently drop every record it held.
+			st.report.Stopped = stopSequence
+			st.report.StoppedAt = fmt.Sprintf("%s+0", name)
+			stopAt = i - 1
+			break
+		}
+
 		// Each segment starts its own checksum chain, because a checkpoint may
 		// have deleted the segment its first record would otherwise chain to.
-		// The sequence number is global and carries the ordering across the
-		// boundary; the checksum chain is what ties records together within a
-		// segment.
-		endCRC, endSeq, consumed, reason := replayBytes(buf, 0, seq+1, func(r record) {
+		// The sequence number is global and carries ordering across the
+		// boundary; the checksum chain ties records together within a segment.
+		endCRC, endSeq, consumed, reason := replayBytes(buf, 0, base+1, func(r record) {
+			// Records the checkpoint already contains are verified - they are
+			// part of the chain - but not re-applied. Applying only a
+			// surviving suffix of them would overwrite newer values with older
+			// ones, which is the exact bug that makes a crash during
+			// checkpointing corrupt a store.
+			if r.seq <= st.report.CheckpointSeq {
+				st.report.Skipped++
+				return
+			}
 			st.report.Applied++
 			if r.kind == kindDelete {
 				delete(st.data, r.key)
@@ -121,7 +157,7 @@ func loadDir(dir string) (*dirState, error) {
 		})
 
 		crc, seq = endCRC, endSeq
-		st.active, st.activeBytes = n, int64(consumed)
+		st.active, st.activeBytes = base, int64(consumed)
 
 		if reason != stopEndOfLog {
 			st.report.Stopped = reason

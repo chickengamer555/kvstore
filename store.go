@@ -37,9 +37,10 @@ type Options struct {
 // claims to be doing - most usefully, that there really is one fsync per
 // acknowledgement.
 type Stats struct {
-	Syncs    int64
-	Records  int64
-	LogBytes int64
+	Syncs       int64
+	Records     int64
+	LogBytes    int64
+	Checkpoints int64
 }
 
 // RecoveryReport says what the last Open found and, the part that matters,
@@ -198,6 +199,14 @@ func (s *Store) write(r record) error {
 	s.stats.Records++
 	s.stats.LogBytes = s.log.bytes
 	s.emit("ack", r.key)
+
+	// Acknowledged above; bounded below. The write is durable whatever happens
+	// next, so an error here means the store could not bound its log, not that
+	// the caller's data was lost. It is still returned, because a store that
+	// silently stops checkpointing fills the disk.
+	if s.log.bytes >= s.opts.CheckpointBytes {
+		return s.checkpointLocked()
+	}
 	return nil
 }
 
