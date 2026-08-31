@@ -59,6 +59,25 @@ jobs:
       - name: test
         run: go test -v -count=1 -timeout 20m ./...
 
+      # A 32-bit build, executed rather than merely compiled, because the bug
+      # this catches only exists where int is 32 bits: record.go reads an
+      # on-disk uint32 length field, and converting it to int before bounding
+      # it made a corrupt length negative and the slice bound that followed
+      # negative with it. TestAbsurdLengthFieldIsATornTail had been failing
+      # under GOARCH=386 since it was written, unrun, until 29145d4.
+      #
+      # Windows only, and that is a real limit rather than a preference. A
+      # windows/amd64 runner executes a 386 binary directly; running a linux/386
+      # binary on the ubuntu runner needs ia32 support this repository has not
+      # verified, and a CI step whose green has not been observed is the thing
+      # this project exists to argue against. Root package only: it is the one
+      # with the decoder in it, and nothing here forks a child.
+      - name: 32-bit build, root package
+        if: matrix.os == 'windows-latest'
+        env:
+          GOARCH: "386"
+        run: go test -count=1 -timeout 10m ./
+
       # The distribution docs/verification.md quotes: not how many times it ran,
       # but where the kills actually landed. Linux and Windows should differ
       # here, and the point of printing it is that a reader can check.

@@ -17,10 +17,13 @@ still in the history rather than squashed out of it.
 
 ## What it is
 
-A write-ahead log, a map, and a checkpoint, in 860 non-blank, non-comment
-lines of Go - the build set that ships on one platform, counted at the time of
-writing - with no dependencies outside the standard library. `Put` returns when
-the record is on disk and the fsync covering it has returned, not before.
+A write-ahead log, a map, and a checkpoint, in 878 non-blank, non-comment
+lines of Go - the linux/amd64 build set, which is the platform every durability
+claim here is made on. That number is asserted by a test rather than typed. The
+one before it was typed, and it was wrong by three before the day was out.
+
+No dependencies outside the standard library. `Put` returns when the record is
+on disk and the fsync covering it has returned, not before.
 
 The measurements behind everything here - which platform settles which claim,
 what the crash corpus was measured to actually reach, the benchmark numbers and
