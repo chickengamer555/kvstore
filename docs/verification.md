@@ -368,24 +368,49 @@ is the check.
 against, so every case added to `verify/kvstore.task.json` stales the proofs that
 came before it. Rather than edit the contract to match old hashes - which would
 be forging the evidence rather than gathering it - every case was observed
-failing again, against the contract as it now stands, in six runs of
+failing again, against the contract as it now stands, in eight runs of
 `general-verify red`. Each run breaks something, runs the whole gate, records
 which declared cases were seen failing, and is then reverted.
+
+The contract gained two cases when the checkpoint-on-a-poisoned-segment defect
+and the stopped-replay case were declared, which moved the hash and staled all
+thirty-three proofs that existed before them. That is the mechanism working
+rather than a defect, and the price of it is this campaign, which is twenty-five
+minutes of the gate running against a deliberately broken tree. Runs are ordered
+broad first and narrow last on purpose, because the ledger keeps the *last*
+recording for each case.
 
 | what was broken | cases recorded |
 |---|---|
 | `decodeRecord`: the checksum comparison and the sequence comparison dropped, and the three length failures reported as checksum mismatches | the four framing cases |
 | `walpolicy.go`: the honest commit replaced with the buffering one from the `kvearlyack` build - acknowledge now, flush every 4KB | `acked-write-survives-immediate-kill`, `unacked-write-may-vanish`, `fsync-precedes-ack` |
 | five independent deletions: `readErr = err`, `os.O_EXCL`, the `Truncate` in `reopenSegment`, `sort.Strings` in `encodeState`, and `earlyAckFlushBytes` set to 1 so the negative control is disarmed | `replay-is-byte-identical`, `snapshot-order-independent-of-insert-order`, `seeded-corpus-no-acked-loss`, `seed-reproduces-failure`, `broken-build-fails-the-power-cut-test`, `recovery-read-failure-is-not-the-end-of-the-log`, `create-refuses-a-name-that-exists` |
-| `createSegment`'s `syncDir` and its `dir-sync` event; the checkpoint trigger in `write` and `PutBatch`; `loadCheckpoint`'s checksum comparison | twelve, including `dir-fsync-on-log-create`, `log-bounded-under-sustained-writes` and `partial-checkpoint-is-ignored` |
+| `createSegment`'s `syncDir` and its `dir-sync` event; the checkpoint trigger in `write` and `PutBatch`; `loadCheckpoint`'s checksum comparison | thirteen, including `dir-fsync-on-log-create`, `log-bounded-under-sustained-writes`, `partial-checkpoint-is-ignored` and `crash-corpus-recovery-is-deterministic` |
 | the `syncDir` after the checkpoint rename | `checkpoint-is-durable-as-soon-as-it-is-installed`, `power-cut-anywhere-in-the-checkpoint-path-loses-nothing` |
-| the crash harness: a fixed kill offset in place of the randomised one, one constant changed in the corpus generator, the `Skipped > 0` branch of `Shape`, and `sort.Strings` on the findings | `kill-points-are-spread`, `corpus-size-floor`, `crash-corpus-recovery-is-deterministic`, `replayed-findings-are-in-a-stable-order`, `every-recovery-shape-is-tallied` |
+| the crash harness: a fixed kill offset in place of the randomised one, the corpus generator's origin constant, the `Skipped > 0` branch of `Shape`, and the `sort.Strings` that fixes the order of the findings | `kill-points-are-spread`, `corpus-size-floor`, `replayed-findings-are-in-a-stable-order`, `every-recovery-shape-is-tallied` |
+| the `r.seq <= CheckpointSeq` skip in `loadDir`, and nothing else | `stopped-replay-never-re-applies-superseded-records` |
+| the `s.log.failed` guard at the top of `checkpointLocked`, and nothing else | `checkpoint-never-rotates-away-from-a-failed-segment` |
 
 A run records every case whose test failed, so where a break was broad some
 cases were recorded by more than one of these and the ledger keeps the last.
 The table says which run each proof finally came from, and the honest reading of
 a broad break is that it shows the test is wired to *something* the break
-touched; a narrow one shows more. The last three rows are narrow on purpose.
+touched; a narrow one shows more. The last four rows are narrow on purpose, and
+the last two touch exactly one line each.
+
+Two of the proofs are worth separating from the rest, because they are the only
+ones in this ledger recorded in the order TDD actually prescribes rather than by
+sabotaging finished code. `checkpoint-never-rotates-away-from-a-failed-segment`
+was recorded against a tree where the fix did not exist yet - the test was
+written, the case declared, the gate run, and the guard added afterwards. It was
+then re-recorded narrowly at the end, because the broad run above it had
+overwritten the entry. `stopped-replay-never-re-applies-superseded-records` is
+the other way round: the code it protects was already there, so the only honest
+proof available is to remove it and watch, which is what the last-but-one row
+is.
+
+The rest were recorded by sabotage, and that is the weaker kind of evidence.
+It shows a test is wired to a line; it does not show the test came first.
 
 ### Individual deletions
 
