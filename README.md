@@ -1,17 +1,21 @@
 # kvstore
 
 An embedded key-value store in Go whose durability claim is tested rather than
-asserted: a harness forks a child process, kills it at a randomised point under
-a recorded seed, reopens the store and checks that every acknowledged write
-survived. A corpus of 240 seeds runs in CI on every push.
+asserted, by two harnesses that reach different things. One forks a child
+process and kills it at a randomised point under a recorded seed; a corpus of
+240 of them runs in CI on every push. The other replaces the platter instead of
+killing the process, so the power can be taken away mid-write - which is the
+only way to catch a store that never called `fsync` at all.
 
 [![ci](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml/badge.svg)](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml)
 
 ## What it is
 
-A write-ahead log, a map, and a checkpoint, in about 800 lines of Go with no
-dependencies outside the standard library. `Put` returns when the record is on
-disk and the fsync covering it has returned - not before.
+A write-ahead log, a map, and a checkpoint, in about 850 lines of Go with no
+dependencies outside the standard library. (854 non-blank,
+non-comment lines in the build set that ships on one platform, at the time of
+writing.) `Put` returns when the record is on disk and the fsync covering it has
+returned - not before.
 
 It exists because "durable" is the easiest word in systems programming to write
 and one of the harder ones to earn, and because the difference between the two
@@ -59,19 +63,24 @@ func main() {
 }
 ```
 
-To watch the crash harness work, and to see what a build that loses data looks
-like under the same harness:
+To watch the harness work, and to see what a build that loses data looks like
+under it, in ascending order of how long you have to wait:
 
 ```sh
-go test ./...                                                    # everything, corpus included
-go run ./crashtest/cmd/crashrepro -seed 7960286522194355700      # one seed, verbosely
+go run ./crashtest/cmd/crashrepro -seed 7960286522194355700        # one crash, ~2s
 go run -tags kvearlyack ./crashtest/cmd/crashrepro -seed 7960286522194355700
+go test -run PowerCut ./                                           # power cuts, instant
+go test ./...                                                      # everything, ~3 min
 ```
 
-The third command builds a deliberately broken store - one that acknowledges
+The second command builds a deliberately broken store - one that acknowledges
 writes while they are still in a user-space buffer - and runs the identical
-harness against it. It fails, loudly, naming the keys it lost. That is the only
-reason to believe the first two commands passing means anything.
+harness against it. It fails, naming the keys it lost. That is most of the
+reason to believe the others passing means anything.
+
+The last one includes the 240-seed corpus and takes about three minutes. There
+is no `-short` mode: a subset run is a weaker claim wearing the same green
+tick.
 
 ## How the durability claim is tested
 
@@ -85,10 +94,22 @@ testing that nothing crashed. So the harness records exactly which writes were
 acknowledged, insists on every one of them, and permits the single operation
 that was in flight when the process died to have happened or not.
 
-**Acknowledgement comes after the fsync.** `write(2)` returning means the bytes
-are in the page cache and a power cut loses them. A trace assertion records
-`write-return`, `sync-start`, `sync-return` and `ack` as they happen and
-insists on that order.
+**Acknowledgement comes after the fsync, and a test can catch the store lying
+about it.** `write(2)` returning means the bytes are in the page cache and a
+power cut loses them. The store writes through a file interface whose test
+implementation has two layers: a write lands in the pending layer, `Sync`
+promotes it to the durable layer, and a simulated power cut throws the pending
+layer away. So the test is `Put`, cut the power, reopen, and the value has to
+be there - an assertion about the data, not about anything the store says
+about itself.
+
+That distinction is not academic. It used to be an event-ordering assertion
+over strings the store appended, plus a sync counter the store incremented,
+and deleting `w.f.Sync()` from `walpolicy.go` left the entire suite green -
+unit tests, the 240-seed crash corpus and the negative control included. The
+commit history has that build in it, and the commit after it puts the line
+back. The ordering assertion is still there and is still worth having; nothing
+rests on it.
 
 **A record failing its checksum or its sequence chain ends recovery.** Each
 record carries a crc32c over its own bytes, chained to the previous record's
@@ -101,7 +122,10 @@ break the chain, and plant a record lifted from a different log.
 before it is opened, and both copies are recovered independently and compared
 byte for byte. Recovery is only deterministic if it is: the recovered state is
 serialised with sorted keys, because Go randomises map iteration order and a
-serialisation that walks the map differs on every run.
+serialisation that walks the map differs on every run. Two other places in this
+repository made the same mistake after that one was fixed - the harness's own
+list of findings, and the shape tally the section below quotes - and both are
+now sorted and enumerated, with tests that fail when they are not.
 
 **Crash injection is randomised, not hand-placed.** The seed fixes the write
 schedule and the kill point; hand-placed crash points only ever test the paths
@@ -111,24 +135,69 @@ the author already thought of, which are the paths that are already correct.
 supersedes - after the checkpoint is durable, never before. A test writes
 600KB against a 32KB bound and watches the live log peak at 32,400 bytes.
 
-## What the crash corpus proves, and what it does not
+## Two harnesses, and what each one reaches
 
-It proves the store survives its process dying at an arbitrary instruction. It
-does **not** prove the fsync is doing its job, and the distinction is worth
-being blunt about because it would be easy to imply otherwise.
+**The crash corpus kills a real process.** It forks a child, kills it at a
+randomised offset under a recorded seed, and checks the directory it left
+behind. That reaches code paths no simulator models - real file handles, real
+kernel state, whatever the operating system does with a half-finished
+checkpoint - and it is the half that can surprise you.
 
-After `Process.Kill` the page cache is untouched and the kernel writes out
-unsynced data anyway. A store that never called `fsync` at all would sail
-through this corpus. Only losing power catches that, and nothing in user space
-can arrange to lose power. The fsync's place in the ordering is established by
-the trace assertion and by reading `walpolicy.go`; the corpus establishes
-something different and also necessary, which is that death at any point leaves
-a directory that recovers correctly.
+It does **not** prove the fsync is doing its job. After `Process.Kill` the page
+cache is untouched and the kernel writes out unsynced data anyway, so a store
+that never called `fsync` at all sails through the whole corpus. That is not a
+gap that can be closed by running more seeds. Only losing power catches it, and
+nothing in user space can arrange to lose power.
 
-This is why the deliberately broken build in `walpolicy_earlyack.go` buffers in
-user space rather than simply dropping the fsync. Dropping the fsync would not
-have been caught, and a negative control that the harness cannot catch is not a
-control.
+It also cannot produce a torn record. For writes this small the write either
+reached the kernel or it did not; a record half on the platter comes from a
+page write interrupted by power loss, which is the same thing the corpus cannot
+stage.
+
+**The simulated disk takes the power away instead of the process.** The store
+performs every filesystem operation through an interface (`file.go`), and the
+tests supply an implementation with a pending layer and a durable layer. `Sync`
+promotes pending to durable, `Crash()` discards pending, and a newly created
+file is deleted unless the directory has been synced. Writes are split into
+512-byte pages, so a sync can be interrupted part way through, or made to
+promote a later page while an earlier one never arrives.
+
+That reaches the three shapes the corpus provably cannot:
+
+| shape | what it stages | test |
+|---|---|---|
+| power cut | everything not fsynced is gone | `TestAckedWriteSurvivesASimulatedPowerCut` |
+| lost directory entry | a new segment survives with no name | `TestANewSegmentsDirectoryEntryIsMadeDurable` |
+| torn page | the fsync is interrupted 30 bytes into a record | `TestATornPageLeavesEveryAcknowledgedWriteRecoverable` |
+| out-of-order flush | a later page is durable, an earlier one is a hole | `TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery` |
+
+Each of the first three fails when the line it is about is removed - the log's
+`Sync`, the directory's `syncDir`, the tail truncation on reopen - and each of
+those builds is a commit in this repository's history rather than a claim on
+this page. The fourth is declared a guard in the contract rather than a probe,
+because this store never had a scanning recovery to break and inventing one to
+have something to catch would be manufacturing evidence.
+
+The simulator is not the real thing and does not pretend to be. It models a
+filesystem where the application owns directory-entry durability, which is
+POSIX; on Windows the platform's implementation of that call is a documented
+no-op and nothing here verifies NTFS's side of the bargain. It says what the
+store does. Whether the hardware honours a flush is a third question that
+neither harness touches, and `bench/results.md` says so of the drive it ran on.
+
+**Both negative controls, and one of them was cacheable.** `walpolicy_earlyack.go`
+is a deliberately broken build that acknowledges writes while they are still in
+a user-space buffer, and the harness is required to catch it. Under the
+simulated disk it is caught every time, on every platform, because nothing
+there depends on timing. Under the crash corpus the detection rate is 13 of 24
+seeds on windows/amd64 and 4 of 24 on ubuntu-latest - same seeds, same build -
+so that rate is reported and not asserted on.
+
+Both controls were also invisible to Go's test cache: the broken build's source
+is excluded from both test binaries by its build tag, so `go test ./...` would
+serve a cached pass after it had been disarmed. Each control now reads that
+file, which is what registers it as an input. A fresh checkout - CI - was never
+affected; a local run was.
 
 ### What was measured, rather than assumed
 
@@ -140,37 +209,54 @@ honest one, so there is a command that prints it:
 go run ./crashtest/cmd/crashrepro -corpus-shapes
 ```
 
-On the author's Windows machine:
+Every shape it can classify gets a row whether it happened or not, because the
+zero rows are the ones this section is about. On the author's Windows machine:
 
 | | 240 seeds, windows/amd64 |
 |---|---|
-| log ended on a record boundary | 240 |
-| recovery stopped at a damaged record | 0 |
 | killed while writing a checkpoint | 0 |
+| checkpoint rejected on its checksum | 0 |
 | killed between rotating the log and deleting the old segments | 0 |
+| killed before the superseded segments were deleted | 0 |
+| recovery stopped at a damaged record | 0 |
+| log ended on a record boundary | 240 |
+| **classified** | **240** |
 | recovered through a checkpoint | 218 |
+| seeds that failed | 0 |
 
-The bottom three rows are the interesting ones and they are all zero, give or
-take - an earlier run of the same corpus caught one child inside a checkpoint
-write. Two things follow, and neither is flattering.
+**Corpus reach is platform-dependent, and this table is the worse of the two.**
+The first CI run on `ubuntu-latest` classified 40 seeds like this:
+
+| | 40 seeds, ubuntu-latest |
+|---|---|
+| killed while writing a checkpoint | 1 |
+| killed between rotating the log and deleting the old segments | 5 |
+| log ended on a record boundary | 34 |
+
+Same corpus, same code, five of forty landing in a window that zero of two
+hundred and forty reached here. `SIGKILL` and `TerminateProcess` preempt
+differently and Linux is evidently the richer of the two. That is one run of a
+40-seed subset against one run of the full 240, so the two are not directly
+comparable and neither is a distribution you should trust to three figures -
+but the direction is not ambiguous, and the Windows figure is not the general
+figure. CI's Linux column is the authoritative one; this machine's is
+informative.
+
+Two things follow from the zeros that remain.
 
 A process kill does not produce torn records for writes this small: the write
-either reached the kernel or it did not. Torn records come from a page write
-interrupted by power loss, which nothing in user space can arrange. So the
-torn-record path is covered by hand-built logs in `record_test.go`, not by the
-corpus.
+either reached the kernel or it did not. That shape is now staged directly, by
+interrupting an fsync part way through a page under the simulated disk, and by
+hand-built logs in `record_test.go`. It is no longer a hole.
 
-And the two narrow windows inside checkpointing are reached so rarely on
-Windows that the corpus cannot be relied on to hit them. They are covered
-explicitly instead, by `TestPartialCheckpointIsIgnored` and
+And the checkpoint windows are reached rarely enough on Windows that the corpus
+cannot be relied on to hit them there. They are covered explicitly as well, by
+`TestPartialCheckpointIsIgnored` and
 `TestRecoveryIgnoresRecordsTheCheckpointAlreadyCovers`, which reconstruct each
 window by hand. The randomised corpus is what would catch a window nobody
-thought of; the hand-built tests cover the two that are known and rarely hit.
-Neither is a substitute for the other.
-
-This has not been measured on Linux yet - `SIGKILL` and `TerminateProcess`
-preempt differently and the distribution may well be richer there. CI prints
-the same table on every run, so it can be checked rather than believed.
+thought of; the hand-built tests cover the two that are known. Neither is a
+substitute for the other, and Linux reaching them 6 times in 40 is the corpus
+doing its job.
 
 The corpus itself is generated, not chosen: `crashtest/corpus.txt` is splitmix64
 from a stated origin, and `TestCorpusSizeFloor` recomputes it and compares. A
@@ -193,8 +279,14 @@ go run ./crashtest/cmd/crashrepro -seed <the seed the test printed>
 **Replaying a preserved crash is exact.** When a seed fails, the harness copies
 the directory the dead process left behind, and CI uploads it as an artifact.
 Replaying those bytes reproduces the identical verdict and the identical
-findings every time, for as long as the directory exists - which is what you
-actually want when you are trying to fix something.
+findings, in the identical order, every time the directory exists - which is
+what you actually want when you are trying to fix something.
+
+That was not true until recently and is worth saying so. The findings were
+built by ranging over a map, so three replays of one preserved directory gave
+the same failures in three different orders, and the test that was supposed to
+catch it compared sorted categories and a count rather than the strings.
+`TestReplayedFindingsAreInAStableOrder` compares them verbatim now.
 
 ```sh
 go run ./crashtest/cmd/crashrepro -replay crash-failures/seed-<n>
@@ -208,21 +300,34 @@ and is informative rather than authoritative.
 
 | | Linux (CI) | Windows (author's machine) |
 |---|---|---|
-| acknowledgement after the log's fsync | checked by CI | run, green |
-| checksum and sequence chain end recovery | checked by CI | run, green |
-| deterministic recovery | checked by CI | run, green |
-| bounded log under sustained writes | checked by CI | run, green |
-| randomised crash corpus, 240 seeds | checked by CI | run, green - see the distribution above |
-| **directory fsync on log creation** | **only checked by CI** | **not applicable - see below** |
+| acknowledgement after the log's fsync | run, green | run, green |
+| checksum and sequence chain end recovery | run, green | run, green |
+| deterministic recovery | run, green | run, green |
+| bounded log under sustained writes | run, green | run, green |
+| randomised crash corpus, 240 seeds | run, green - richer distribution, see above | run, green |
+| **directory fsync on log creation** | **run, green - `DirSync:true`, first execution anywhere** | **not applicable - see below** |
+| race detector | run, clean | cannot run - no C toolchain here |
+| negative control detection rate | 4 of 24 seeds | 13 of 24 seeds |
 
-Read that first column as what CI checks, not as something the author has
-watched succeed. At the time of writing this repository has no CI history at
-all: every row has been run on Windows and none on Linux, on any machine. The
-badge at the top of this file is the live answer. If it is green, the Linux
-column is a result; until then it is a plan.
+There is CI history now, and the first run was **red**, on the last row. The
+negative control's floor was 6 of 24, set from the Windows measurement, and
+Linux caught the same broken build on the same seeds 4 times. The guard was
+right to fire; the number was wrong, and a rate that moves by a factor of three
+between platforms is not a property of this store. The rate is now reported
+rather than asserted, and the load-bearing negative control moved to the
+simulated disk where it is deterministic. That is a real weakening of one
+assertion and a real strengthening of another, and both halves are in the
+commit history.
 
-The last row is the one that only Linux can settle, and it is the reason CI
-exists here rather than being decoration.
+The rest of that run is the first evidence any of this has on Linux: the race
+detector ran clean for the first time anywhere, and `DirSync` reported true,
+which is the first time the POSIX directory-fsync path has executed at all.
+
+Read "run, green" as one CI run, not as a track record. The badge at the top of
+this file is the live answer.
+
+The directory-fsync row is the one that only Linux can settle, and it is the
+reason CI exists here rather than being decoration.
 
 Creating a file and fsyncing it makes the file's contents durable. It does not
 make the directory entry that names the file durable: that entry is the parent
@@ -237,11 +342,21 @@ statement from "not possible". NTFS journals metadata operations through
 `$LogFile`: the directory entry is made durable by the filesystem rather than
 by the application, so the no-op is correct there. What is not acceptable is
 staying quiet about the difference, so `kvstore.Platform()` reports which of
-the two this build is, in words, at run time - and `TestDirFsyncOnLogCreate`
-asserts the store always reaches that decision and always records the answer,
-whichever platform it is on.
+the two this build is, in words, at run time - and
+`TestPlatformReportsItsDirectorySyncGuaranteeHonestly` asserts the store always
+reaches that decision and that what it says about itself matches the build it
+is, whichever platform it is on.
 
-Nothing on the Windows side of that row has been verified by anything here.
+That test is named for exactly what it checks, because the previous name
+promised more. It does not establish that the directory sync makes anything
+durable - an emitted event cannot - and CI reporting it as PASS on Windows over
+a log line saying nothing had been verified was the wrong shape.
+`TestANewSegmentsDirectoryEntryIsMadeDurable` is what establishes the sync
+happens: the simulated disk deletes a file whose directory was never synced, so
+removing `syncDir` from `createSegment` loses the whole log.
+
+Nothing on the Windows side of that row - whether NTFS really makes the entry
+durable without the application asking - has been verified by anything here.
 
 ## Benchmarks
 
@@ -304,6 +419,14 @@ Deliberate, and none of them are on a roadmap.
   catches divergence from my own understanding of correctness, not from a
   specification. That is weaker evidence than an external conformance suite
   like `toml-test`, and no amount of seeds fixes it.
+- **The simulated disk is a model, and I wrote it.** It stages a power cut
+  faithfully enough to catch a missing `fsync`, a missing `syncDir` and a
+  missing truncation, and each of those was checked by removing the line and
+  watching the test fail. It does not model rename and remove reverting, it
+  assumes a filesystem where the application owns directory-entry durability,
+  and it says nothing at all about whether a drive honours a flush. Every
+  simulator is an argument about which details matter; this one's are written
+  down at the top of `simdisk_test.go`.
 
 ## Design
 
@@ -331,9 +454,27 @@ the data.
 ## Verification
 
 Every case in `verify/kvstore.task.json` was observed failing before it passed,
-and the record of that is committed in `.general-harness/redproof.json` - the
-test name that failed, when, and against which version of the contract. A test
-that has never been seen to fail has not been shown to be wired to anything.
+with one declared exception, and the record is committed in
+`.general-harness/redproof.json` - the test name that failed, when, and against
+which version of the contract. A test that has never been seen to fail has not
+been shown to be wired to anything.
+
+The stronger version of that evidence is in the git history rather than in the
+JSON, because a file the author's own tooling wrote is weaker proof than a
+build a stranger can check out and run. Several commits here are deliberately
+broken and are labelled `(red)` in their subject: the log's fsync deleted, the
+directory's fsync deleted, the torn-tail truncation deleted, the negative
+control disarmed, and the honest write path replaced with the buffering one so
+the crash corpus can be watched catching a store that really loses data. Each
+is followed by the commit that restores it. `git checkout <sha> && go test ./...`
+is the check.
+
+The one exception is declared in the contract as a guard rather than a probe:
+the out-of-order flush test has no honest red proof, because this store never
+had a scanning recovery to break. Twelve of the cases carry proofs recorded
+against an earlier version of the contract, which `general-verify` reports as a
+warning; the contract gained a unit this turn and those cases were not
+re-observed.
 
 ## Licence
 
