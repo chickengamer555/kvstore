@@ -71,6 +71,22 @@ type wal struct {
 	// buffers records in user space and acknowledges before they have reached
 	// the kernel at all. It is unused in every normal build.
 	pending []byte
+
+	// failed is set by the first commit that did not complete, and once it is
+	// set this segment accepts nothing more.
+	//
+	// That is not defensiveness, it is clause B1. A commit that fails part way
+	// through leaves bytes in the file that recovery cannot vouch for, and
+	// w.wrote has already moved past them - so the next record would be written
+	// BEYOND the point recovery stops at. It would be fsynced, it would be
+	// acknowledged, and it would never be read again. A store that keeps taking
+	// writes after a failed fsync is handing out promises it has already lost
+	// the ability to keep, which is worse than refusing them.
+	//
+	// The refusal is not permanent and the log is not damaged in a way recovery
+	// does not already handle: reopening the store truncates the unvouched-for
+	// tail away and writing resumes from there.
+	failed error
 }
 
 func (w *wal) emit(name, detail string) {
@@ -169,6 +185,9 @@ func joinClose(err error, f file) error {
 // so that the crash harness has a deliberately broken build to prove it can
 // catch. See walpolicy.go.
 func (w *wal) appendRecords(recs []record) error {
+	if w.failed != nil {
+		return fmt.Errorf("kvstore: this log segment stopped accepting writes when an earlier commit failed: %w", w.failed)
+	}
 	w.scratch = w.scratch[:0]
 	crc := w.crc
 	seq := w.seq
@@ -183,7 +202,9 @@ func (w *wal) appendRecords(recs []record) error {
 	if err != nil {
 		// A short or failed write leaves the segment in an unknown state, so
 		// the in-memory chain must not advance past it. Recovery finds a torn
-		// tail here, which is exactly what it is for.
+		// tail here, which is exactly what it is for - and until it has run,
+		// this segment is closed for business. See the field comment.
+		w.failed = err
 		return err
 	}
 
@@ -197,6 +218,13 @@ func (w *wal) close() error {
 		return nil
 	}
 	f := w.f
+	if w.failed != nil {
+		// Nothing buffered is worth flushing over a segment whose last write
+		// did not complete, and a caller that ignored the error from Put should
+		// hear about it here rather than nowhere.
+		w.f = nil
+		return joinClose(w.failed, f)
+	}
 	// finish() before the handle is dropped: in a build that buffers, this is
 	// where the buffer is written out, and it needs the file to still be here.
 	err := w.finish()
