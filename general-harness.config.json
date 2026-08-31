@@ -1,0 +1,16 @@
+{
+  "contractsDir": "verify",
+  "runner": "gotest",
+  "gate": {
+    "test": "go test ./...",
+    "lint": "go vet ./..."
+  },
+  "quality": {
+    "forbidFocusedTests": true,
+    "forbidSkippedTests": true,
+    "forbidAssertionFreeTests": true,
+    "forbidSuppressions": true,
+    "forbidSwallowedErrors": true,
+    "maxTodoMarkers": 0
+  }
+}

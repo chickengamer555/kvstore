@@ -1,0 +1,109 @@
+{
+  "$schema": "https://github.com/chickengamer555/general-harness/kernel/schemas/task-contract.schema.json",
+  "task": "kvstore",
+  "title": "A crash-safe embedded key-value store, proven by randomised crash injection",
+  "description": "An embedded key-value store with a write-ahead log. Durability is not asserted in prose: a harness forks a child, kills it at a randomised offset under a recorded seed, reopens the store in the parent and checks that every acknowledged write survived. The seed corpus runs in CI on Linux, which is the only platform where the POSIX durability claims are meaningful.",
+  "tier": "standard",
+  "clauses": [
+    {
+      "id": "B1",
+      "text": "A write the store has acknowledged is present after a crash immediately following that acknowledgement. A write not yet acknowledged may be absent, and that is not a failure.",
+      "observable_by": "the crash harness records the set of acknowledged keys before each kill and asserts every one is readable after recovery, while the single in-flight unacknowledged key is permitted to be absent, unchanged or applied",
+      "rationale": "This distinction is the entire contract of a durable store. Losing an unacknowledged write is correct behaviour; losing an acknowledged one is data loss. A suite that does not encode the difference is not testing durability, it is testing that the happy path works twice."
+    },
+    {
+      "id": "B2",
+      "text": "Durability comes from fsync, not from write returning. No acknowledgement is issued before the log's fsync returns, and creating the log file fsyncs the directory that contains it.",
+      "observable_by": "an ordering test records sync-start, sync-return and ack as they happen and asserts sync-return precedes ack; on a platform with directory fsync the sync of the containing directory is asserted at log creation, and on a platform without it the test asserts the store reports the guarantee as unavailable rather than claiming it",
+      "rationale": "A successful write(2) guarantees nothing - the bytes sit in the page cache and a power cut loses them. The directory entry for a newly created file needs its own fsync or the file itself can vanish. This is the most common thing people get wrong."
+    },
+    {
+      "id": "B3",
+      "text": "Every log record carries a checksum over its own bytes and a sequence number linking it to the previous one. A record failing either check ends recovery at that point and is never returned as data.",
+      "observable_by": "tests that flip a byte inside a record, truncate a record mid-write, and break the sequence chain each assert that recovery stops cleanly at the last intact record and that no value written after the damage is ever returned from Get",
+      "rationale": "A page is not written atomically by the OS. A crash mid-write leaves a torn record, and a store that trusts it returns garbage that surfaces as a bug somewhere unrelated. Per-record checksums plus a sequence chain make a torn tail detectable rather than silently plausible."
+    },
+    {
+      "id": "B4",
+      "text": "Recovery is deterministic. The same log replayed twice produces byte-identical state.",
+      "observable_by": "recovery run twice over the same directory produces an identical serialised snapshot compared byte for byte, over hand-built logs and over every log left behind by the randomised crash corpus",
+      "rationale": "Non-deterministic recovery means a crash can leave two machines reading the same log and disagreeing about the data. It also makes every other durability test unfalsifiable, because a failure cannot be reproduced."
+    },
+    {
+      "id": "B5",
+      "text": "Crash injection at randomised points never corrupts the store, and the harness is genuinely randomised with a recorded seed rather than a handful of hand-placed crash points.",
+      "observable_by": "the harness forks a child that writes under a seeded schedule, kills it at a randomised offset, reopens in the parent and asserts B1, B3 and B4; the seed is printed on every run, the spread of kill points across the corpus is asserted to be non-degenerate, a failing seed reproduces the same failure with one documented command, and a deliberately unsynced build is caught by the same harness",
+      "rationale": "This is the headline clause and the one a sceptical reader checks first. Hand-placed crash points prove almost nothing - they test the paths the author already thought about, which are exactly the paths that are already correct."
+    },
+    {
+      "id": "B6",
+      "text": "The write-ahead log is bounded. Checkpointing runs, and the log does not grow without limit under sustained writes.",
+      "observable_by": "a sustained-write test asserts live log segment bytes stay under a stated bound while total bytes written exceeds that bound by at least an order of magnitude, and that acknowledged writes still survive a crash taken during and after checkpointing",
+      "rationale": "An unbounded log works in a demo and fills the disk in production. Checkpointing is also where crash-safety bugs concentrate, because it is the one path that deletes data on purpose."
+    }
+  ],
+  "units": [
+    {
+      "id": "framing",
+      "surface": "record.go",
+      "tests": "record_test.go",
+      "cases": [
+        { "id": "corrupt-byte-ends-recovery", "description": "a flipped byte inside a record is caught by the checksum; recovery stops at the previous record", "probe": true, "maps_to_clause": "B3" },
+        { "id": "torn-tail-record-discarded", "description": "a record truncated mid-write is discarded, not half-applied", "probe": true, "maps_to_clause": "B3" },
+        { "id": "sequence-break-ends-recovery", "description": "a broken sequence chain stops recovery rather than skipping the gap", "probe": true, "maps_to_clause": "B3" },
+        { "id": "absurd-length-field-is-a-torn-tail", "description": "a garbage length prefix is treated as end of log, not as an allocation request", "probe": true, "maps_to_clause": "B3" }
+      ]
+    },
+    {
+      "id": "durability",
+      "surface": "wal.go, store.go",
+      "tests": "durability_test.go",
+      "cases": [
+        { "id": "acked-write-survives-immediate-kill", "description": "the bytes are on disk the instant Put returns: replaying the log file alone, with no in-memory state and no Close, yields the key", "probe": true, "maps_to_clause": "B1" },
+        { "id": "unacked-write-may-vanish", "description": "a write whose record was torn by the crash is permitted to be absent, and its absence is not reported as an error - asserts the suite does not over-claim", "maps_to_clause": "B1" },
+        { "id": "fsync-precedes-ack", "description": "the recorded event order is sync-start, sync-return, ack - never ack before sync-return", "probe": true, "maps_to_clause": "B2" },
+        { "id": "dir-fsync-on-log-create", "description": "the containing directory is synced when a log segment is created; where the platform has no such syscall the store must report the guarantee as unavailable rather than claim it", "probe": true, "maps_to_clause": "B2" }
+      ]
+    },
+    {
+      "id": "recovery",
+      "surface": "recover.go",
+      "tests": "recover_test.go",
+      "cases": [
+        { "id": "replay-is-byte-identical", "description": "two replays of one directory serialise to identical bytes", "probe": true, "maps_to_clause": "B4" },
+        { "id": "snapshot-order-independent-of-insert-order", "description": "two stores with the same final contents written in different orders serialise identically", "maps_to_clause": "B4" }
+      ]
+    },
+    {
+      "id": "checkpoint",
+      "surface": "checkpoint.go",
+      "tests": "checkpoint_test.go",
+      "cases": [
+        { "id": "log-bounded-under-sustained-writes", "description": "live log segment bytes stay under the stated bound while total bytes written exceeds it by 10x or more", "probe": true, "maps_to_clause": "B6" },
+        { "id": "recovery-after-checkpoint-preserves-acked", "description": "acknowledged writes survive reopening after a checkpoint, including writes made before the checkpoint", "maps_to_clause": "B6" },
+        { "id": "partial-checkpoint-is-ignored", "description": "a checkpoint file left half-written by a crash is rejected by its checksum and recovery falls back to the log", "probe": true, "maps_to_clause": "B6" }
+      ]
+    },
+    {
+      "id": "crash-harness",
+      "surface": "crashtest/",
+      "tests": "crashtest/crash_test.go",
+      "cases": [
+        { "id": "seeded-corpus-no-acked-loss", "description": "the recorded seed corpus runs end to end with zero acknowledged writes lost and zero corrupt reads", "probe": true, "maps_to_clause": "B5" },
+        { "id": "kill-points-are-spread", "description": "the corpus kills children at a spread of different points, not the same one every time - a degenerate spread would make the corpus size meaningless", "probe": true, "maps_to_clause": "B5" },
+        { "id": "seed-reproduces-failure", "description": "a deliberately unsynced build fails under the harness, prints its seed, and that seed reproduces the identical failure while the honest build passes it", "probe": true, "maps_to_clause": "B5" },
+        { "id": "corpus-size-floor", "description": "the recorded corpus is at least 200 seeds and the count is printed", "maps_to_clause": "B5" },
+        { "id": "crash-corpus-recovery-is-deterministic", "description": "every directory left behind by the corpus replays to byte-identical state twice", "probe": true, "maps_to_clause": "B4" }
+      ]
+    }
+  ],
+  "non_goals": [
+    "Concurrency beyond a single process holding the directory. There is no MVCC, no reader snapshot isolation and no multi-process access.",
+    "Range scans, iterators, transactions or a secondary index. This is a durability demonstration, not a database.",
+    "Competing with a real storage engine on throughput. Every write costs an fsync by default and that is the point.",
+    "Proving the guarantee against real power loss. Nothing in userspace can do that; the harness proves the process can die at any instruction, not that the drive honours its flush."
+  ],
+  "open_questions": [
+    "Directory fsync has no Windows equivalent. The store reports it as unavailable there rather than claiming it - is reporting enough, or should Open refuse to run in a mode it cannot back?"
+  ]
+}
