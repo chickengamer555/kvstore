@@ -9,6 +9,12 @@ only way to catch a store that never called `fsync` at all.
 
 [![ci](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml/badge.svg)](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml)
 
+Read a green tick as one CI run, not as a track record. There were three runs
+at the time of writing, and the first of them was **red** - a negative-control
+threshold set from a Windows measurement meeting Linux reality. What happened
+next is in [docs/verification.md](docs/verification.md), and the red run is
+still in the history rather than squashed out of it.
+
 ## What it is
 
 A write-ahead log, a map, and a checkpoint, in 860 non-blank, non-comment
@@ -64,8 +70,18 @@ go test -count=1 ./...                                            # everything, 
 
 The second builds a deliberately broken store - one that acknowledges writes
 while they are still in a user-space buffer - and runs the identical harness
-against it. It fails, naming the keys it lost. That is most of the reason to
-believe the others passing means anything.
+against it. On that seed it fails, naming the keys it lost.
+
+**That seed is the best case, not the average one.** Across the first 24 seeds
+of the corpus the same broken build was caught 13 times on Windows and **4 times
+on ubuntu-latest** - the platform this README calls authoritative for every
+durability claim in it. So the corpus misses a store with no `fsync` in it
+twenty times out of twenty-four on the platform that matters, which is not a
+tuning problem: after `Process.Kill` the page cache is intact and the kernel
+writes the data out anyway. The reason to believe a green corpus run means
+anything is the *simulated disk*, where the same broken build fails
+deterministically on every platform. The corpus is evidence about paths, not
+about `fsync`.
 
 `-count=1` is not decoration. Without it Go serves a cached pass: on a warm
 checkout `go test ./...` comes back green in well under a second having run
@@ -98,6 +114,15 @@ the log cannot vouch for with the write offset already past them, so the
 unreachable for ever. That was a real bug, found by the first test in this
 repository that ever made a filesystem call fail. A segment now refuses every
 write after a commit on it has failed.
+
+That closed half of it. The other half was found by a reviewer walking one step
+further along the same sequence: the *store* could still checkpoint, which
+rotates onto a fresh segment and leaves the poisoned one underneath it, and the
+next `Open` then deletes the successor the store had been acknowledging writes
+into. Two acknowledged keys gone on a healthy machine with no crash anywhere in
+the sequence. `checkpointLocked` now refuses to rotate off a segment recovery
+cannot vouch for, and `TestACheckpointNeverRotatesAwayFromAFailedSegment` is the
+test that was red first.
 
 **A record failing its checksum or its sequence chain ends recovery.** crc32c
 over each record's own bytes, chained to the previous record's checksum within
@@ -147,6 +172,7 @@ power can go in the middle of a multi-step operation.
 | the installed checkpoint is not there: the rename reverted | `TestTheCheckpointIsDurableAsSoonAsItIsInstalled` |
 | fsync returns EIO; a write takes ten bytes and stops | `TestAFailedSyncNeverProducesAnAcknowledgement` |
 | a segment that stopped accepting writes, reopened | `TestAStoreWhoseSegmentFailedReopensAndResumes` |
+| a checkpoint asked for while the live segment is poisoned | `TestACheckpointNeverRotatesAwayFromAFailedSegment` |
 | the power out at each of the ten calls a checkpoint makes | `TestAPowerCutAnywhereInTheCheckpointPathLosesNothing` |
 
 All but one fail when the line they are about is removed, and those builds are
@@ -160,6 +186,27 @@ application owns directory-entry durability, which is POSIX; on Windows that
 call is a documented no-op and nothing here verifies NTFS's side of the
 bargain. Whether the hardware honours a flush is a third question neither
 harness touches, and `bench/results.md` says so of the drive it ran on.
+
+## Speed, and where this loses
+
+**442 writes per second** with one fsync per acknowledgement, on an i7-8700K
+with an NVMe SSD and NTFS, median of three. That is the honest number. Batched
+with `PutBatch` it is 36,931/sec, and that figure buys its eighty-fold
+improvement by moving the unit of acknowledgement from the record to the batch -
+a real weakening of the guarantee, not a free win. Reads are a map lookup with
+no disk in them.
+
+**Where this loses: against any real storage engine, on throughput, by one to
+three orders of magnitude.** RocksDB, LMDB and SQLite in WAL mode all default to
+not fsyncing every write, and configured to do so they still win on batching, on
+threading, and on being storage engines rather than eight hundred lines of
+demonstration. Writes here are serialised behind one mutex, so core count does
+not help the write path. The claim in this repository is durability, not speed.
+
+Those numbers are from Windows; the durability claims beside them are proven on
+Linux. Re-run the harness before quoting any of it - `bench/results.md` is
+exactly what the harness printed, and the command is in
+[docs/verification.md](docs/verification.md).
 
 ## Limitations
 
