@@ -602,6 +602,9 @@ func (s simFS) create(name string) (file, error) {
 	// unless the directory is journalled, where the entry is on the platter
 	// when this returns and syncDir has nothing left to do.
 	s.disk.dirLive[name] = ino
+	if s.disk.metadataIsJournalled {
+		s.disk.dirDurable[name] = ino
+	}
 	s.disk.tick("create")
 	return simFile{disk: s.disk, ino: ino}, nil
 }
@@ -613,6 +616,9 @@ func (s simFS) createTrunc(name string) (file, error) {
 	if !ok {
 		ino = s.disk.newInoLocked()
 		s.disk.dirLive[name] = ino
+		if s.disk.metadataIsJournalled {
+			s.disk.dirDurable[name] = ino
+		}
 	} else {
 		zero := int64(0)
 		s.disk.trunc[ino] = &zero
@@ -661,7 +667,7 @@ func (s simFS) remove(name string) error {
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
 	}
 	delete(s.disk.dirLive, name)
-	if s.disk.unlinksReachThePlatterImmediately {
+	if s.disk.unlinksReachThePlatterImmediately || s.disk.metadataIsJournalled {
 		delete(s.disk.dirDurable, name)
 		s.disk.collectLocked()
 	}
@@ -734,6 +740,10 @@ func (s simFS) rename(from, to string) error {
 	}
 	s.disk.dirLive[to] = ino
 	delete(s.disk.dirLive, from)
+	if s.disk.metadataIsJournalled {
+		s.disk.dirDurable[to] = ino
+		delete(s.disk.dirDurable, from)
+	}
 	s.disk.tick("rename")
 	return nil
 }

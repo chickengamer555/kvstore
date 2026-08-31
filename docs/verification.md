@@ -337,9 +337,23 @@ store says about itself matches the build it is.
 
 That test is named for exactly what it checks, because the previous name
 promised more. It does not establish that the directory sync makes anything
-durable - an emitted event cannot. Nothing on the Windows side of that row -
-whether NTFS really makes the entry durable without the application asking -
-has been verified by anything here.
+durable - an emitted event cannot.
+
+What has since been established is the half a model can reach.
+`journalleddir_test.go` runs the store against a directory that behaves the way
+NTFS is documented to - the entry durable when the call returns - with a
+`syncDir` that does nothing, which is what this build ships. Acknowledged
+writes survive the power cut. The same no-op against the POSIX rule loses them,
+and that pairing is the point: what the platform's code does and what the
+filesystem does are two separate questions, and the Windows build is one
+particular answer to each.
+
+Whether NTFS really makes the entry durable without the application asking is
+still verified by nothing here, and is not something any model can settle - the
+model would be checking its own assumption. That half is a paragraph, and by
+the rule below a paragraph owes the reader the experiment that would settle it:
+a crash corpus on NTFS with the directory sync removed, on hardware that can
+actually lose power. It has not been run.
 
 ## Benchmarks
 
@@ -827,7 +841,7 @@ accidental rather than argued, and it cost the thirteenth row below.
 | an unreadable checkpoint is treated as absent, because the log is authoritative | segments are only removed after the checkpoint that supersedes them is durable | if that ever failed, the log would start past sequence 0 with no checkpoint, and the refusal at the top of `loadDir` is what catches it: `TestRecoveryRefusesToOpenWhenTheLogStartsPastTheCheckpoint`. **Nothing caught it before this turn** |
 | the four steps of `checkpointLocked` leave no window in which neither the checkpoint nor the log holds the data | the order of the four | `TestAPowerCutAnywhereInTheCheckpointPathLosesNothing`. Invert it and five of ten crash points fail, naming the keys. Proven before this turn |
 | one post-rename directory fsync is sufficient | the rename cannot become durable before the create | **nothing here can break it.** The simulated disk promotes every pending directory entry at once, so the falsifying state cannot be staged. It is an ext4/XFS journal-ordering property rather than a POSIX one, and both the comment and the section above now say so instead of implying it |
-| no directory fsync is needed on Windows | NTFS writes a new file's directory entry to the `$LogFile` transaction log before reporting the create complete, so the name is made durable by the filesystem | **nothing here can break it, for the same reason as the row above**: the simulated disk promotes every pending directory entry at once and cannot stage the falsifying state. Nor is there anything else - no crash corpus run on NTFS, no citation. It is stated more strongly than the ext4 row it mirrors, which now scopes itself. `syncdir_windows.go` carries the hedge in its last sentence and `dirSyncNote` prints it into the Windows CI log on every push, which makes it simultaneously the least verified and the most visible safety argument in the repository |
+| no directory fsync is needed on Windows | NTFS writes a new file's directory entry to the `$LogFile` transaction log before reporting the create complete, so the name is made durable by the filesystem | **the store's half is now measured**, and the sentence this cell used to carry - "nothing here can break it, for the same reason as the row above" - was a statement about the harness, not about the store. `journalleddir_test.go`: the simulated disk grew the NTFS rule as a second directory model (`JournalMetadata`), and the store runs against it with a `syncDir` that does nothing, which is `syncdir_windows.go`. Leave the rule unwired and the acknowledged write is lost - that is the red proof. Run the same no-op against the POSIX rule and it is lost too, which is what stops the first result being vacuous. What nothing here can break is the premise itself, that NTFS does what its documentation says; no model reaches that, and `dirSyncNote` still prints the hedge into the Windows CI log on every push |
 | the segments `OpenWith` deletes hold no record recovery can reach | that the stop point is a torn tail in the newest segment | true of every directory the store produces and **false in general**. A segment beyond a gap verifies perfectly; recovery declines to reach it by choice, and then the deletion makes the choice permanent. Measured by the unlink-order test above and now written at the deletion rather than only here |
 | the `maxPayload` ceiling stops a 3.9GB `make([]byte)` | that there is an allocation on that path | **there is none.** `decodeRecord` slices a buffer `readAll` already produced, and `len(buf) < total` rejects the same input a line later, which is why deleting the ceiling left everything green. The two real reasons are in `record.go` now, and each has a test |
 | a record lifted from elsewhere fails, because the checksum is chained | the chain restarts at zero at each segment boundary | already a declared limitation with its own test: a whole segment lifted at a matching base is accepted. Proven as a limitation rather than as a guarantee |
@@ -955,8 +969,8 @@ assuming less is the correct assumption.
 |---|---|---|
 | `checkpointLocked` unlinks oldest first | **1**, was filed 2 | closed this turn, above |
 | `OpenWith` deletes segments recovery cannot reach | **2** | pinned this turn. Found by the mutation sweep below, not by reading |
-| one post-rename directory fsync is sufficient (ext4) | **3 or 4, and I do not know which** | the reason given was "the simulated disk promotes every pending directory entry at once", which by rule 3 is a statement about the disk. The extension would be per-entry early promotion of creates and renames, and `PromoteUnlinksEarly` is a third of it. Whether that is *enough* is unproven: this model has no metadata journal at all, and ext4's guarantee is a journal-ordering property. I have not tried, and the row now says which of the two it is: unknown |
-| no directory fsync is needed on Windows (NTFS) | **4** | outside this model entirely, and with no citation either. The experiment that would settle it is a crash corpus on NTFS with the directory sync removed, on hardware that can actually lose power. It has not been run, `syncdir_windows.go` carries the hedge, and `dirSyncNote` prints it into the Windows CI log on every push |
+| one post-rename directory fsync is sufficient (ext4) | **3 or 4, and I still do not know which** | the reason given was "the simulated disk promotes every pending directory entry at once", which by rule 3 is a statement about the disk. The extension would be per-entry early promotion of creates and renames, and `PromoteUnlinksEarly` is a third of it. The disk has since grown a second directory rule for the Windows row above, so "this model has no metadata journal at all" is no longer the right objection - but that rule models durability **on completion**, not journal ORDERING, and ext4's guarantee is an ordering property. It does not close this row. I have still not tried the extension that would, and the row still says which of the two it is: unknown |
+| no directory fsync is needed on Windows (NTFS) | **was 4. The store's half was 3, and is now 1 with the price paid; the premise stays 4** | filed at 4 - "outside this model entirely" - and that was wrong, by the exact confusion rule 3 warns about and the same species of mistake as the unlink order. The extension was about thirty lines: a second directory rule on the simulated disk where a create is durable when the call returns, plus a wrapper making `syncDir` a no-op, so that the platform's code and the filesystem's behaviour are two knobs rather than one. With those, the store's correctness **given** the NTFS contract is a test in both directions. What stays at 4 is the premise: whether `$LogFile` really recovers the entry. The experiment that would settle it is still a crash corpus on NTFS on hardware that can lose power, and it has still not been run |
 | a whole segment lifted at a matching base is accepted | **2** | already pinned, with its own test |
 | the `maxPayload` ceiling | **1** | closed at `4a13a3e`, and the mutation sweep confirms it |
 | the crash corpus cannot catch a missing fsync | measured | 13 of 24 seeds on Windows, 4 of 24 on Linux, 0 for a build with no fsync at all |

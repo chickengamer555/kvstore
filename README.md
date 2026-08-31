@@ -231,11 +231,27 @@ and stops", against one test name. It is three rows now. In a table whose whole
 value is a one-to-one map from shape to test, a row naming two shapes and one
 test cannot be checked as written, and a reviewer stopped there.
 
-The simulator is not the real thing. It models a filesystem where the
-application owns directory-entry durability, which is POSIX; on Windows that
-call is a documented no-op and nothing here verifies NTFS's side of the
-bargain. Whether the hardware honours a flush is a third question neither
-harness touches, and `bench/results.md` says so of the drive it ran on.
+The simulator is not the real thing, and it now models two directory rules
+rather than one. Under the POSIX rule the application owns directory-entry
+durability and `syncdir_unix.go` does the fsync. Under the NTFS rule the
+filesystem journals the entry through `$LogFile` and `syncdir_windows.go`
+correctly does nothing.
+
+That second rule closes a gap this page used to name and leave open.
+`journalleddir_test.go` runs the Windows pairing - a `syncDir` that does
+nothing, against a journalled directory - and acknowledged writes survive the
+power cut. The same no-op against the POSIX rule loses them, and that second
+half is what stops the first from being vacuous: it is also the reason
+`syncdir_unix.go` exists. Both are two knobs on the simulated disk, one for what
+the platform's code does and one for what the filesystem does, because they are
+different questions and the Windows build is one particular pairing of them.
+
+What that proves is the store being correct **given** the documented NTFS
+contract. Whether NTFS honours that contract is not verified here and no model
+can settle it, because the model would be checking its own assumption. It is
+the same residual as whether the hardware honours a flush, which neither
+harness touches and which `bench/results.md` records as unknown for the drive
+it ran on. The crash corpus still runs on Linux only.
 
 ## Speed, and where this loses
 

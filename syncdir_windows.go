@@ -20,8 +20,24 @@ package kvstore
 // So the store does reach the decision on Windows - it records that it reached
 // it, and reports the guarantee as coming from the filesystem rather than from
 // this code. What it must never do is stay silent and let a README written
-// against Linux imply the same proof holds here. Nothing in this file has been
-// verified by the crash corpus; the corpus runs on Linux.
+// against Linux imply the same proof holds here.
+//
+// What executes this argument, and what still does not:
+//
+// The reasoning above used to be a comment and nothing ran it. It is now two
+// tests in journalleddir_test.go. The simulated disk grew a second directory
+// rule - JournalMetadata, the NTFS one, where a create is on the platter when
+// the call returns - and the store is run against it with a syncDir that does
+// nothing, which is this file. Acknowledged writes survive.
+// The paired test runs the same no-op syncDir against the UNJOURNALLED rule
+// and the write is lost, which is what makes the first result mean something
+// and is the reason syncdir_unix.go exists.
+//
+// That is the store being correct GIVEN this file's claim about NTFS. The
+// claim itself is still unverified: nothing here has watched $LogFile recover
+// a directory entry after real power loss, and no model can - it is the same
+// residual as whether a drive honours a flush. The crash corpus still runs on
+// Linux only.
 const dirSyncSupported = false
 
 const dirSyncNote = "windows/NTFS: no directory fsync is issued and none exists. NTFS journals metadata operations through $LogFile, so a new file's directory entry is made durable by the filesystem rather than by this code. This has not been verified here - the crash corpus runs on Linux."
