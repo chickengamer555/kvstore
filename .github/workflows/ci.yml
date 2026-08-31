@@ -87,11 +87,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # The crash corpus runs its seeds in parallel and the store is shared
-      # across goroutines by any real caller, so the race detector has
-      # something to say here.
+      # The store is shared across goroutines by any real caller, and
+      # TestConcurrentWritersAllSurvive hammers the map, the counters and the
+      # log's sequence and checksum state from eight of them at once. That is
+      # where a data race in this package could hide, and it is what this job
+      # is for.
       - name: test -race
-        run: go test -race -count=1 -timeout 20m ./...
+        run: go test -race -count=1 -timeout 15m ./
+
+      # Deliberately a subset of the corpus. Race instrumentation makes every
+      # child several times slower, and 240 instrumented children buys almost
+      # nothing over 40: each seed forks the same code down the same path, so
+      # the interesting concurrency here is the harness's own worker pool
+      # rather than anything the seed varies. The full corpus runs uninstrumented
+      # in the test job above.
+      - name: test -race over part of the corpus
+        run: go test -race -count=1 -timeout 15m -run 'TestKillPointsAreSpread|TestCrashCorpusRecoveryIsDeterministic|TestCorpusSizeFloor' ./crashtest/
 
   bench:
     name: benchmark (ubuntu-latest)

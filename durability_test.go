@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -294,6 +295,76 @@ func TestPutBatchIsOneSyncAndFullyDurable(t *testing.T) {
 		got, ok := reopened.Get(e.Key)
 		if !ok || !bytes.Equal(got, e.Value) {
 			t.Fatalf("after recovery %q = %q, %v; want %q, true", e.Key, got, ok, e.Value)
+		}
+	}
+}
+
+// The store says it is safe for concurrent use, and until now nothing checked
+// that. Written for the race detector rather than for the assertions: under
+// -race this exercises the map, the counters and the log's sequence and
+// checksum state from several goroutines at once, which is the only place a
+// data race in this package could hide.
+//
+// The assertions still matter. Every Put here is separately acknowledged, so
+// clause B1 applies to all of them and every key has to come back after a
+// reopen - concurrency is not an excuse for losing one.
+func TestConcurrentWritersAllSurvive(t *testing.T) {
+	dir := t.TempDir()
+	const writers = 8
+	const perWriter = 25
+
+	func() {
+		s, err := OpenWith(Options{Dir: dir, CheckpointBytes: 4 << 10})
+		if err != nil {
+			t.Fatalf("OpenWith: %v", err)
+		}
+		defer func() { _ = s.Close() }()
+
+		var wg sync.WaitGroup
+		errs := make([]error, writers)
+		for w := range writers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range perWriter {
+					key := fmt.Sprintf("w%d-k%02d", w, i)
+					if err := s.Put(key, []byte(key+"-value")); err != nil {
+						errs[w] = err
+						return
+					}
+					// Read our own writes back while others are writing.
+					if got, ok := s.Get(key); !ok || !bytes.Equal(got, []byte(key+"-value")) {
+						errs[w] = fmt.Errorf("read-your-writes failed for %s: %q, %v", key, got, ok)
+						return
+					}
+				}
+			}()
+		}
+		wg.Wait()
+		for w, err := range errs {
+			if err != nil {
+				t.Fatalf("writer %d: %v", w, err)
+			}
+		}
+		if got := s.Stats().Records; got != writers*perWriter {
+			t.Errorf("store counted %d records, want %d", got, writers*perWriter)
+		}
+	}()
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.Len() != writers*perWriter {
+		t.Fatalf("recovered %d keys, want %d", reopened.Len(), writers*perWriter)
+	}
+	for w := range writers {
+		for i := range perWriter {
+			key := fmt.Sprintf("w%d-k%02d", w, i)
+			if got, ok := reopened.Get(key); !ok || !bytes.Equal(got, []byte(key+"-value")) {
+				t.Fatalf("acknowledged key %q = %q, %v after recovery", key, got, ok)
+			}
 		}
 	}
 }
