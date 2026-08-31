@@ -329,18 +329,32 @@ nothing is transcribed by hand. On an i7-8700K with an NVMe SSD and NTFS:
 
 | workload | ops/sec |
 |---|---:|
-| `Put`, one fsync per call | 442 |
-| `PutBatch` of 100, one fsync per batch | 36,931 |
-| `Get` against a warm store | 1,065,551 |
-| recovery, 100,000 records / 15.4 MiB of log | 144 ms |
+| `Put`, one fsync per call | 465 |
+| `PutBatch` of 100, one fsync per batch | 37,955 |
+| `Get` against a warm store | 2,510,515 |
+| recovery, 100,000 records / 15.4 MiB of log | 139 ms |
 
 Those are medians of three on a desktop under ordinary load, and they move
-between runs - the write figures by a few percent, the read figure by as much as
-a factor of two, because it is a map lookup and is dominated by whatever else
-the machine is doing. Treat them as an order of magnitude, and re-run the
-harness rather than trusting the table.
+between runs. How much is now measured rather than estimated, because the file
+was regenerated on the same machine and the two runs are the range: the write
+figures moved by 5% and 3% (442 to 465, 36,931 to 37,955), recovery of 100,000
+records by 4% (144ms to 139ms), and the read figure by a factor of 2.4
+(1,065,551 to 2,510,515) because it is a map lookup with no disk in it and is
+dominated by whatever else the machine is doing. The small recovery rows are
+worse than that - 100 records moved from 25ms to 14ms and 10,000 from 45ms to
+105ms - which is what "mostly fixed cost" means when the fixed cost is a
+Windows filesystem under load. Treat all of it as an order of magnitude and
+re-run the harness rather than trusting the table.
 
-**442 writes per second is the honest number.** The batched figure buys its
+The earlier run was recorded against `v0.1.0`, which is the version whose
+durability EVIDENCE `v0.1.1` retracted, and the README was quoting those numbers
+as current. Nothing on the write path changed between them - the retraction was
+about what the tests observed, not about what the store does - so the numbers
+were not wrong, but the provenance line pointed at a superseded build and no
+re-run was recorded. Now it says `v0.1.1+11 (working tree at ae54672)`, which is
+a tree a reader can check out.
+
+**465 writes per second is the honest number.** The batched figure buys its
 eighty-fold improvement by moving the unit of acknowledgement from the record to
 the batch: nothing in a `PutBatch` is durable until the call returns, and a
 crash in the middle can leave any prefix of it. That is a real weakening of the

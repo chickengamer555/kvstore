@@ -228,9 +228,9 @@ harness touches, and `bench/results.md` says so of the drive it ran on.
 
 ## Speed, and where this loses
 
-**442 writes per second** with one fsync per acknowledgement, on an i7-8700K
+**465 writes per second** with one fsync per acknowledgement, on an i7-8700K
 with an NVMe SSD and NTFS, median of three. That is the honest number. Batched
-with `PutBatch` it is 36,931/sec, and that figure buys its eighty-fold
+with `PutBatch` it is 37,955/sec, and that figure buys its eighty-fold
 improvement by moving the unit of acknowledgement from the record to the batch -
 a real weakening of the guarantee, not a free win. Reads are a map lookup with
 no disk in them.
