@@ -55,8 +55,8 @@ mutants=(
 '4|recover.go|do not require segments to abut|s@^\t\tif i > 0 \&\& base != seq {$@\t\tif false {@'
 '5|recover.go|re-apply superseded records instead of skipping them|s@^\t\t\tif r.seq <= st.report.CheckpointSeq {$@\t\t\tif false {@'
 '6|recover.go|keep the segments past the point replay stopped|s@^\t\tst.drop = append(st.drop, segs\[stopAt+1:\]...)$@\t\t_ = stopAt@'
-'7|record.go|accept a length field the record cannot contain|s@^\tif total > maxPayload {$@\tif false {@'
-'8|wal.go|acknowledge before the fsync rather than after it|@'
+'7|record.go|accept a length field the record cannot contain|s@^\tif claimed > maxPayload {$@\tif false {@'
+'8|wal.go|acknowledge before the fsync rather than after it|'
 )
 
 run_one() {
@@ -67,7 +67,12 @@ run_one() {
   what="${spec%%|*}"; expr="${spec#*|}"
 
   if [ -z "$expr" ]; then
-    printf '%-3s %-14s %-52s SKIP  (has its own red proof; see docs/verification.md)\n' "$id" "$file" "$what"
+    # Not a gap: this one already exists as a build-tag negative control -
+    # walpolicy_earlyack.go, run in CI, and the test that shells out to it
+    # fails if the build it produces is NOT caught. Doing it here as well would
+    # be a second copy of a control that is already stronger than a mutant,
+    # because it survives in the tree instead of being reconstructed by sed.
+    printf '%-3s %-14s %-52s SKIP  (covered by the walpolicy_earlyack control)\n' "$id" "$file" "$what"
     return
   fi
 
