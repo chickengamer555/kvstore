@@ -247,3 +247,8 @@ func (s *Store) Close() error {
 	s.closed = true
 	return s.log.close()
 }
+
+// Snapshot returns a deterministic serialisation of the live key set.
+//
+// Not implemented yet - recover_test.go says what it has to do.
+func (s *Store) Snapshot() []byte { return nil }

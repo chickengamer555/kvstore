@@ -88,6 +88,28 @@
       "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "recovery",
+      "case": "replay-is-byte-identical",
+      "key": "recovery/replay-is-byte-identical",
+      "matched_test": "TestReplayIsByteIdentical",
+      "failed_at": "2026-08-31T02:14:44.555Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "recovery",
+      "case": "snapshot-order-independent-of-insert-order",
+      "key": "recovery/snapshot-order-independent-of-insert-order",
+      "matched_test": "TestSnapshotOrderIndependentOfInsertOrder",
+      "failed_at": "2026-08-31T02:14:44.555Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }
