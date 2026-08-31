@@ -86,6 +86,99 @@ The corpus itself is generated, not chosen: `crashtest/corpus.txt` is
 splitmix64 from a stated origin, and `TestCorpusSizeFloor` recomputes it and
 compares. A seed that started failing cannot be quietly deleted from the file.
 
+## Run 33374624703, read from the log rather than from its message
+
+This section is a retraction. Between `dc8ebd7` and `3a1d3f7` this repository
+described that run in four places - the README, `drain()`'s comment,
+`TestSeededCorpusNoAckedLoss`'s comment and one supervision test's comment - and
+the description was wrong in every one of them. It said two children wedged on a
+pipe that never closed, that the seeds neither passed nor failed, and that the
+goroutine dump named nothing. None of that is in the log. What follows is what
+is, with the commands to get it.
+
+```sh
+gh run view 33374624703 --repo chickengamer555/kvstore --log-failed
+```
+
+The run is commit `1c81fe6`. `test (ubuntu-latest)` finished green in 81
+seconds. `test (windows-latest)` ran for twenty minutes and was killed by `go
+test`'s own alarm. From the failed step:
+
+| what the log says | how to count it |
+|---|---|
+| 240 seeds started | `grep -c '=== RUN   TestSeededCorpusNoAckedLoss/seed-'` |
+| 190 of them were released from `t.Parallel` | `grep -o '=== CONT  TestSeededCorpusNoAckedLoss/seed-[0-9]*' \| sort -u \| wc -l` |
+| 50 were still parked in `t.Parallel` at the panic | 50 goroutines in `testing.(*testState).waitParallel`, all `[chan receive, 19 minutes]` |
+| 2 seeds failed, by name | two `crash_test.go:115: harness error on seed ...` lines. At `1c81fe6` that line is `t.Fatalf` |
+| 2 seeds were still running, aged 5s and 9s | the panic header names both: `running tests: TestSeededCorpusNoAckedLoss/seed-10715399672343484120 (5s)` and `.../seed-14872561942650471843 (9s)` |
+| 186 seeds finished | 190 released, less the 2 that failed and the 2 in flight |
+
+So the arithmetic closes and nothing is missing. **There is no wedged pipe in
+that dump.** The two readers parked in `bufio.Scanner.Scan` inside
+`poll.FD.execIO` are goroutines 445 and 446; they were created by goroutines 250
+and 249, and both of those are in the `select` at `harness.go:404`, which at
+`1c81fe6` is the select *before* the kill. Their children were alive and
+writing - the last two lines of the whole log are those two children failing to
+print `reporting ack 84` and `reporting ack 138` as the test binary died and
+closed the pipes underneath them. A goroutine blocked reading from a live
+process is a healthy blocking read. It was read as the pathology.
+
+The two seeds that did fail were killed by the watchdog rather than by their
+schedule. `KillPlan` is a pure function of the seed, so their kill points can be
+computed without running them: 327 acknowledgements for seed
+13825680155814345871 and 294 for 14935214377022494360. Neither had got there at
+sixty seconds. **How far they actually had got is recorded nowhere**, because
+the message that fired threw the number away - and that is the one real defect
+in the harness this run exposed. `84` and `138` belong to the other two seeds
+entirely, and the log does not even say which child printed which.
+
+The message was `produced no output for 1m0s`. The sixty seconds was
+`childTimeout`, measured from the moment the child started, and there was no
+idle timer anywhere in the harness. It was a wall clock described as silence.
+
+**What the run actually died of** is a slow runner. The same run's own `ok`
+lines are the measurement, and they are in the full log rather than the failed
+one:
+
+```sh
+gh run view 33374624703 --repo chickengamer555/kvstore --log | grep 'ok  \|FAIL'
+```
+
+```
+test (ubuntu-latest)   ok    github.com/chickengamer555/kvstore            3.260s
+test (windows-latest)  ok    github.com/chickengamer555/kvstore          166.127s
+test (ubuntu-latest)   ok    github.com/chickengamer555/kvstore/crashtest  30.560s
+test (windows-latest)  FAIL  github.com/chickengamer555/kvstore/crashtest 1200.054s
+```
+
+The root package is 51x slower on that runner in the same run. The crash corpus
+finished all 240 seeds in half a minute on `ubuntu-latest` and had finished 186
+of them at twenty minutes on `windows-latest`. The mechanisms built since - two
+clocks that name themselves, and a reconciliation that fails the package when
+observations do not account for the corpus - address exactly that. Neither
+addresses a wedged pipe, because there was not one.
+
+### How the wrong version got written
+
+The watchdog said `produced no output for 1m0s`. That sentence was taken as
+evidence for the sentences underneath it, and the artefact that falsifies it was
+sitting in CI, one `gh run view` away, for two days. Every later claim was
+downstream of the first: no output means the child stopped, a child that stopped
+whose parent never returned means a pipe that never closed, and a pipe that
+never closed means a wedge. Three inferences, each reasonable given the one
+above it, none checked against the dump.
+
+This is the same shape as the `v0.1.1` retraction and the premise sweep, one
+level up: a diagnostic that reported one thing and named another, believed
+because it was the store's own narration of itself. The rule this repository
+keeps rediscovering is that a message is a claim, and a claim from the system
+under test is the weakest evidence available for what the system under test did.
+
+The fix in the code is at `318059e` - the two clocks now name themselves and
+carry the acknowledgement count. The fix to the process is this page: the four
+paragraphs that narrated it now point here, and none of them describes the dump
+without quoting it.
+
 ## The test cache, and one thing I could not reproduce
 
 Go caches test results, and both negative controls in this repository shell out

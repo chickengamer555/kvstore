@@ -21,9 +21,11 @@ import (
 // finding and no failure: it produces a timeout, which reads as flake. So each
 // of these asserts two things - that the harness stops rather than blocking,
 // and that the sentence it stops with is true. The second matters as much as
-// the first: run 33374624703 was diagnosed as a deadlock in the store for two
-// hours on the strength of a message that said "produced no output" about a
-// child that had produced a hundred and fifty lines of it.
+// the first: run 33374624703 was diagnosed as a deadlock in the store, and then
+// as a wedged pipe, on the strength of a message that said "produced no output"
+// while measuring time since the child started. Both diagnoses were wrong and
+// the dump says so - docs/verification.md reads it - and both were reached
+// without opening it.
 
 // The fake children. These are not the store: they are processes that
 // misbehave in one specific way each, so the harness's supervision can be
@@ -44,8 +46,9 @@ const (
 	fakeChatty = "chatty"
 	// orphan acknowledges steadily, and holds the write end of its own stdout
 	// open in a grandchild that outlives it. When the harness kills it the pipe
-	// stays open and the reader never sees EOF - which is the shape run
-	// 33374624703 wedged on, staged portably.
+	// stays open and the reader never sees EOF. This is a constructed hazard,
+	// not a reproduction of anything that has happened here: the shipped child
+	// spawns no grandchild.
 	fakeOrphan = "orphan"
 	// sleeper is the grandchild. It does nothing but hold the handle.
 	fakeSleeper = "sleeper"
@@ -285,21 +288,23 @@ func holderCopy(t *testing.T) (exePath, sentinel string) {
 	return exePath, sentinel
 }
 
-// B5, and the liveness defect run 33374624703 actually died of.
+// B5, and a liveness defect this harness had and has never suffered.
 //
 // childTimeout used to guard only the select before the kill. Both paths out of
-// it then blocked on a bare `<-done`, so if the reader goroutine never saw EOF
-// on the killed child's stdout the harness sat there until the package timeout
-// twenty minutes later - no observation, no finding, no failing seed, and a red
-// CI run whose only content is a goroutine dump.
+// it then blocked on a bare `<-done`, so a reader goroutine that never saw EOF
+// on the killed child's stdout left the harness sitting there until the package
+// timeout - no observation, no finding, no failing seed, and a red CI run whose
+// only content is a goroutine dump.
 //
-// The runner's version of "the pipe did not close" is still unexplained: the
-// child was a compiled binary with no grandchild, and an overlapped ReadFile
-// stayed parked on a handle whose only writer had been terminated. This test
-// does not reproduce that cause. It reproduces the observable - a write end
-// that is still open after the child is dead - by having the child hand its
-// stdout to a grandchild that outlives it, which is portable and is the same
-// thing from the harness's side.
+// Read the scope of this test carefully, because an earlier version of this
+// comment did not have one. It says nothing about run 33374624703. That run was
+// described here as the wedge this test reproduces, and the dump does not show
+// a wedge: docs/verification.md quotes it. What this test does is construct the
+// hazard deliberately - the child hands its stdout to a grandchild that
+// outlives it, so the write end is still open after the child is dead - and
+// check that the harness stops anyway. A supervisor should survive a pipe it
+// does not own being held open, whether or not that has yet happened to this
+// one.
 //
 // What is asserted is only what the harness can promise: it stops, and it says
 // the seed produced no observation rather than silently returning a Result

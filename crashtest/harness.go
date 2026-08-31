@@ -566,15 +566,22 @@ func pollInterval(sup Supervision) time.Duration {
 
 // drain waits for the reader goroutine to reach the end of the child's output.
 //
-// It is bounded, and that is the whole point of it. The receive here used to be
-// bare on both paths out of the select above, on the reasoning that a killed
-// child's pipe closes and the reader returns. On windows-latest in run
-// 33374624703 it did not: the goroutine dump has the reader parked in
-// bufio.Scanner.Scan inside poll.FD.execIO, on the stdout of a process that had
-// already been terminated, twenty minutes in. Why the handle stayed readable is
-// still unexplained - the child was a compiled binary with no grandchild to
-// inherit it - and the honest response to a cause you cannot name is a bound,
-// not a theory.
+// It is bounded, and the justification for that is a principle rather than an
+// incident. The receive here used to be bare on both paths out of the select
+// above, on the reasoning that a killed child's pipe closes and the reader
+// returns. That reasoning has a hole with a name: the write end of a pipe
+// survives the process that was given it, so any descendant holding a copy
+// keeps it open, and a supervisor whose last act is an unbounded receive is not
+// a supervisor. The shipped child spawns nothing, so this cannot happen to the
+// corpus today; it is guarded because "today" is a property of a program that
+// changes and the cost of the guard is one select.
+//
+// It was originally written for a different and wrong reason. Run 33374624703
+// was read as a wedged pipe, and it was not one - the two readers parked in
+// Scan in that dump belonged to children that were alive and acknowledging.
+// docs/verification.md has the log. The bound survives the retraction of the
+// story it was built for; the sentence claiming the dump showed a terminated
+// child's handle stay readable does not, and is gone.
 //
 // Once the pipe has had to be closed by force the acknowledgement stream is
 // truncated at an arbitrary point, so res.Acked is no longer the number of

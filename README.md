@@ -19,28 +19,35 @@ reality. What happened next is in [docs/verification.md](docs/verification.md);
 the number came down and the concession is written next to it.
 
 Run [33374624703](https://github.com/chickengamer555/kvstore/actions/runs/33374624703)
-was read as flake and pushed past before it was diagnosed, and the cause was in
-the crash harness rather than in the store. On `windows-latest`, two children were killed as designed and the goroutine
-reading their output never saw the pipe close, so those seeds neither passed nor
-failed - they wedged, the package hit its twenty-minute limit, and what came out
-was a goroutine dump naming nothing. The harness's own message made it worse: it
-reported *"produced no output for 1m0s"* about children that had emitted 84 and
-138 acknowledgements, because the clock it named was an absolute deadline rather
-than the idle timer the sentence described. That sentence sent two readers
-toward "deadlock".
+went red on `windows-latest`, and this repository then described it wrongly, in
+four places, for two days. **Nothing wedged and nothing deadlocked.** 186 of 240
+seeds finished, two failed by name, two were still running and fifty had not
+started when `go test`'s twenty-minute alarm arrived. The runner was slow - the
+root package takes 3.260s on `ubuntu-latest` and 166.127s on `windows-latest` in
+that same run - and a sixty-second watchdog measuring time since the child
+started reported itself as *"produced no output for 1m0s"*.
 
-Three things changed. The wait after the kill is bounded and closes the pipe by
-force rather than blocking. The idle bound is genuinely idle, reset by every
-acknowledgement, with a separate wall clock behind it, and the message names
-which one ran out and how far the child had got. And a seed that produces no
-observation is now counted as one - the corpus reconciles the seeds it ran
-against the observations it made, and a run that does not add up fails and names
-the seeds, rather than reporting the size of the corpus file. A reader could not
-previously tell a run of 240 seeds from a run of 238 that hung on two. The
-`windows-latest` job is also the slower one by a wide margin and has come within
-a minute of its budget; if it goes short again it now says so instead of timing
-out, but it is still a job that can be red for reasons that are not about this
-store, which is why the Linux job is the authoritative one.
+The dump is quoted line by line, with the commands to pull it and the arithmetic
+that closes, in
+[docs/verification.md](docs/verification.md#run-33374624703-read-from-the-log-rather-than-from-its-message).
+So is how the wrong version got written, which is the part worth reading: a
+diagnostic named the wrong clock, and three inferences were stacked on it
+without anyone opening the artefact that was sitting in CI the whole time.
+
+Two things changed as a result. The bound is two clocks rather than one - an
+idle timer reset by every acknowledgement, a wall clock behind it, and a message
+that names which ran out and how many acknowledgements the child had made. And a
+seed that produces no observation is counted as one: the corpus reconciles the
+seeds it ran against the observations it made, and a run that does not add up
+fails and names them instead of printing the size of the corpus file. A reader
+could not previously tell a run of 240 seeds from a run of 238 that gave up on
+two.
+
+**Check the badge against the tree.** A green tick is one run of one commit.
+`gh run list --limit 1` names the commit CI last saw and `git log --oneline -1`
+names the commit you are reading; anything between them is unproven on a runner.
+When this paragraph was written that gap was ten commits, and it included both
+of the changes described above.
 
 ## What it is
 

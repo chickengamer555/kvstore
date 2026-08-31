@@ -107,9 +107,12 @@ func TestCorpusSizeFloor(t *testing.T) {
 // What this reports is OBSERVATIONS, not attempts, and the difference is the
 // point. A seed the harness gives up on has no findings, so it fails nothing;
 // before the tally it was simply absent from a run that then printed the size
-// of the corpus underneath it. Two seeds did exactly that in run 33374624703,
-// and what came out was a twenty-minute package timeout with a goroutine dump
-// under it - no failing seed, nothing named, nothing to fix.
+// of the corpus underneath it. Run 33374624703 is the measurement: fifty of its
+// 240 seeds were still parked in t.Parallel when the package hit its
+// twenty-minute limit, and two more were mid-flight. Fifty-two seeds produced
+// nothing, and the line underneath still said 240. (Two other seeds in that run
+// DID fail by name - the harness error path has always been loud. It is the
+// unstarted ones that were silent. docs/verification.md reads the log.)
 //
 // So every seed ends in exactly one of Observe or NoObservation, the two are
 // reconciled against the size of the corpus after the last subtest has
