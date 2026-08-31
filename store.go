@@ -185,25 +185,82 @@ func (s *Store) Delete(key string) error {
 func (s *Store) write(r record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return ErrClosed
-	}
 
 	batch := [1]record{r}
-	if err := s.log.appendRecords(batch[:]); err != nil {
+	if err := s.commit(batch[:]); err != nil {
 		return err
 	}
-
-	s.apply(r)
-	s.stats.Syncs = s.log.syncs
-	s.stats.Records++
-	s.stats.LogBytes = s.log.bytes
 	s.emit("ack", r.key)
 
 	// Acknowledged above; bounded below. The write is durable whatever happens
 	// next, so an error here means the store could not bound its log, not that
 	// the caller's data was lost. It is still returned, because a store that
 	// silently stops checkpointing fills the disk.
+	if s.log.bytes >= s.opts.CheckpointBytes {
+		return s.checkpointLocked()
+	}
+	return nil
+}
+
+// commit is the shared body of every write path: append to the log, wait for
+// its fsync, then update memory. Callers hold the lock and emit their own
+// acknowledgement event afterwards.
+func (s *Store) commit(recs []record) error {
+	if s.closed {
+		return ErrClosed
+	}
+	if err := s.log.appendRecords(recs); err != nil {
+		return err
+	}
+	for i := range recs {
+		s.apply(recs[i])
+	}
+	s.stats.Syncs = s.log.syncs
+	s.stats.Records += int64(len(recs))
+	s.stats.LogBytes = s.log.bytes
+	return nil
+}
+
+// Entry is one operation in a batch.
+type Entry struct {
+	Key   string
+	Value []byte
+	// Delete removes Key instead of storing Value.
+	Delete bool
+}
+
+// PutBatch applies every entry and returns once the whole batch is durable.
+//
+// This is group commit, and the trade it makes is worth being explicit about.
+// One fsync covers the entire batch instead of one per entry, which is most of
+// the throughput difference in bench/results.md - the syscall cost barely
+// moves, the waiting does. What changes is the unit of acknowledgement: with
+// Put, every returned call is separately durable; with PutBatch, nothing in
+// the batch is durable until the call returns, and a crash in the middle can
+// leave any prefix of it.
+//
+// That is a real weakening, not a free win, and it is why Put and not PutBatch
+// is what the README's headline number is measured with.
+func (s *Store) PutBatch(entries []Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	recs := make([]record, len(entries))
+	for i, e := range entries {
+		kind := kindPut
+		if e.Delete {
+			kind = kindDelete
+		}
+		recs[i] = record{kind: kind, key: e.Key, value: append([]byte(nil), e.Value...)}
+	}
+	if err := s.commit(recs); err != nil {
+		return err
+	}
+	s.emit("ack-batch", fmt.Sprint(len(recs)))
+
 	if s.log.bytes >= s.opts.CheckpointBytes {
 		return s.checkpointLocked()
 	}

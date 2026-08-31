@@ -2,6 +2,7 @@ package kvstore
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -254,5 +255,45 @@ func TestDirFsyncOnLogCreate(t *testing.T) {
 	// platform where the answer is not negotiable.
 	if runtime.GOOS == "linux" && !g.DirSync {
 		t.Fatal("directory fsync is reported unavailable on Linux - the build tags are wrong, and this is exactly the regression CI exists to catch")
+	}
+}
+
+// Group commit, and the property that makes it honest: the whole batch costs
+// one fsync, and nothing in it is acknowledged until that fsync returns.
+//
+// This is the number the README labels as the one that trades away durability
+// granularity, so the test pins both halves - the saving, and what it costs.
+func TestPutBatchIsOneSyncAndFullyDurable(t *testing.T) {
+	dir := t.TempDir()
+	s, tr := openTraced(t, dir)
+
+	entries := make([]Entry, 50)
+	for i := range entries {
+		entries[i] = Entry{Key: fmt.Sprintf("b%02d", i), Value: []byte(fmt.Sprintf("v%02d", i))}
+	}
+	before := s.Stats().Syncs
+	if err := s.PutBatch(entries); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+	if got := s.Stats().Syncs - before; got != 1 {
+		t.Errorf("a batch of %d entries cost %d fsyncs, want exactly 1", len(entries), got)
+	}
+	if idx := tr.indexOf("ack-batch"); idx < 0 {
+		t.Fatalf("no ack-batch event; trace was %v", tr.events)
+	} else if sync := tr.since(0, "sync-return"); sync < 0 || sync > idx {
+		t.Errorf("the batch was acknowledged before its fsync returned; trace was %v", tr.events)
+	}
+
+	// Durable without Close, exactly like Put.
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	for _, e := range entries {
+		got, ok := reopened.Get(e.Key)
+		if !ok || !bytes.Equal(got, e.Value) {
+			t.Fatalf("after recovery %q = %q, %v; want %q, true", e.Key, got, ok, e.Value)
+		}
 	}
 }
