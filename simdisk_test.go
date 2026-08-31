@@ -33,25 +33,58 @@ const simPageSize = 512
 // never leaves the pending layer, so the simulated power cut takes it and the
 // reopened store has never heard of the key.
 //
-// A newly created file gets the same treatment one level up. Its contents can
-// be made durable by fsyncing it, but the directory entry that names it lives
-// in the parent's metadata and is no more durable than any unsynced write
-// until syncDir is called. Until then a power cut leaves the contents on the
-// platter with nothing pointing at them, which is indistinguishable from the
-// file never having existed - and is precisely the failure syncdir_unix.go
-// exists to prevent. Here that is the `linked` map, and Crash() deletes every
-// file that is not linked.
+// # Metadata is staged too, and that is the second layer
+//
+// A file's contents are one thing; the directory entry that names it is
+// another, and the two are made durable by different calls. So this disk keeps
+// the directory itself in two layers: dirLive is what a running process sees,
+// dirDurable is what is on the platter. create, rename and remove change
+// dirLive only. syncDir - fsync(2) on the containing directory - copies live
+// over durable. Crash copies durable back over live, so an unsynced create
+// vanishes, an unsynced rename reverts to the old name, and an unsynced remove
+// brings the file back.
+//
+// Each of those is a state a real POSIX filesystem is permitted to leave, and
+// each is a reason the application has to ask:
+//
+//   - create without syncDir: the file's contents are on the platter with
+//     nothing pointing at them, which is indistinguishable from the file never
+//     having existed. This is what syncdir_unix.go exists to prevent.
+//   - rename without syncDir: rename(2) is atomic with respect to readers,
+//     which is a different property from being durable. Until the directory is
+//     synced, the old name is what a reopening process finds.
+//   - remove without syncDir: unlink(2) is a directory write like any other,
+//     and until the directory is synced the entry can come back.
+//   - truncate without fsync: a file's length is inode metadata. ftruncate(2)
+//     changes what this process reads; fsync on that descriptor is what makes
+//     the new length survive.
+//
+// The model sits at the pessimistic end of what POSIX permits: an unsynced
+// metadata change ALWAYS reverts here, where a real filesystem may or may not
+// keep it. That direction is the safe one - a store that passes here passes
+// under any weaker model - and it is the same stance Crash() already takes on
+// unsynced data. It is not a source of failures a real disk cannot produce,
+// because every state it stages is one a real disk is allowed to leave; it
+// stages them every time rather than sometimes.
 //
 // What it models:
 //   - file contents, and which of them survive a power cut
-//   - the directory entry of a newly created file, and whether it survives
+//   - the directory: creates, renames and removes, and whether each survives
+//   - a file's length, and whether a truncation survives
 //   - a write made durable in pieces, in an order the store did not choose
 //   - a page that was only partly on the platter when the power went
+//   - a filesystem call that fails, and a write that is short
 //
 // What it deliberately does NOT model, so that no test here over-claims:
-// rename and remove take effect durably at once. Modelling a rename reverting
-// would mean keeping the superseded file, and the crash-during-checkpoint
-// window it would open is already covered by TestPartialCheckpointIsIgnored.
+//
+//   - Partial metadata. A directory sync here promotes every pending entry at
+//     once. A real filesystem journals in transactions and may commit some of
+//     a directory's changes without the rest.
+//   - Two truncations of one file with no fsync between them: the second
+//     replaces the first. The store never does this.
+//   - Ordering between two different files' data. Each file's pending layer is
+//     promoted only by its own fsync, which is right, but nothing here models
+//     a device reordering across files.
 //
 // And the standing caveat on all of it: this is a model of a filesystem where
 // the application owns directory-entry durability, which is POSIX. It says
@@ -59,11 +92,28 @@ const simPageSize = 512
 // to - not what NTFS does with the no-op it gets on Windows. That half is a
 // claim about the platform and is stated as one, in syncdir_windows.go.
 type simDisk struct {
-	mu      sync.Mutex
-	durable map[string][]byte
-	pending map[string][]simPage
-	linked  map[string]bool
-	faults  map[string]*simFault
+	mu sync.Mutex
+
+	// Contents are keyed by inode rather than by name, because a rename moves
+	// a directory entry and does not touch a byte of the file. Keying by name
+	// would make a reverted rename lose the data along with the name.
+	durable map[int][]byte
+	pending map[int][]simPage
+
+	// trunc is a staged ftruncate: the new length, not on the platter until
+	// this file is fsynced.
+	trunc map[int]*int64
+
+	faults map[int]*simFault
+	errs   map[simErrKey]*simErr
+
+	// dirLive is the directory a running process sees; dirDurable is the
+	// directory on the platter. See the type comment.
+	dirLive    map[string]int
+	dirDurable map[string]int
+
+	nextIno int
+	crashAt *simCrashPoint
 
 	syncs    int
 	dirSyncs int
@@ -105,12 +155,46 @@ func tornSync(n int) simFault { return simFault{stop: 1, tear: n} }
 // inside the file's extent that were never written, which read back as zero.
 func lastPageOnlySync() simFault { return simFault{reverse: true, stop: 1, tear: -1} }
 
+// simErr is one injected filesystem failure, armed for the next call to op on
+// one file. A real disk returns EIO on a bad sector and ENOSPC when the
+// filesystem is full, and neither is rare enough to leave untested: before
+// this existed nothing in this repository ever made a filesystem call fail, so
+// every error branch on the write path had never executed once.
+//
+// accept is how many bytes a failing WriteAt takes before it gives up, which
+// is the short write. It is ignored by every other operation.
+type simErr struct {
+	accept int
+	err    error
+}
+
+type simErrKey struct {
+	ino int
+	op  string
+}
+
+// simCrashPoint is a power cut armed for the end of the nth future call to op.
+// See CrashAtNth.
+type simCrashPoint struct {
+	op string
+	n  int
+}
+
+// simPowerCut is what the disk panics with when an armed crash point fires. A
+// process does not run on after the power goes, so neither does the store: the
+// panic is what stops the rest of the operation it was half way through.
+// runUntilPowerCut in powercut_test.go recovers it.
+type simPowerCut struct{ op string }
+
 func newSimDisk() *simDisk {
 	return &simDisk{
-		durable: map[string][]byte{},
-		pending: map[string][]simPage{},
-		linked:  map[string]bool{},
-		faults:  map[string]*simFault{},
+		durable:    map[int][]byte{},
+		pending:    map[int][]simPage{},
+		trunc:      map[int]*int64{},
+		faults:     map[int]*simFault{},
+		errs:       map[simErrKey]*simErr{},
+		dirLive:    map[string]int{},
+		dirDurable: map[string]int{},
 	}
 }
 
@@ -118,43 +202,145 @@ func newSimDisk() *simDisk {
 // build the paths that appear in traces and error messages.
 func (d *simDisk) FS(dir string) fileSystem { return simFS{disk: d, dir: dir} }
 
-// Crash discards every byte that has been written and not yet promoted by a
-// Sync, and every file whose directory entry was never made durable by a
-// syncDir. This is the power cut.
+// Crash discards every byte written and not yet promoted by a Sync, every
+// length change not yet fsynced, and every directory change not yet promoted
+// by a syncDir. This is the power cut.
 func (d *simDisk) Crash() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.pending = map[string][]simPage{}
-	d.faults = map[string]*simFault{}
-	for name, linked := range d.linked {
-		if !linked {
-			delete(d.durable, name)
-			delete(d.linked, name)
+	d.crashLocked()
+}
+
+func (d *simDisk) crashLocked() {
+	d.pending = map[int][]simPage{}
+	d.trunc = map[int]*int64{}
+	d.faults = map[int]*simFault{}
+	d.errs = map[simErrKey]*simErr{}
+	d.dirLive = cloneDir(d.dirDurable)
+	d.collectLocked()
+	d.crashes++
+}
+
+// collectLocked drops the contents of any inode no directory entry names any
+// more. A file with no entry on the platter and none in the live directory is
+// a file that did not survive, whatever is left of its bytes.
+func (d *simDisk) collectLocked() {
+	live := map[int]bool{}
+	for _, ino := range d.dirDurable {
+		live[ino] = true
+	}
+	for _, ino := range d.dirLive {
+		live[ino] = true
+	}
+	for ino := range d.durable {
+		if !live[ino] {
+			delete(d.durable, ino)
+			delete(d.pending, ino)
+			delete(d.trunc, ino)
+			delete(d.faults, ino)
 		}
 	}
-	d.crashes++
+}
+
+func cloneDir(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// CrashAtNth arms a power cut at the END of the nth future call to op, which
+// is how a test reaches a window inside a multi-step operation - between the
+// rename that installs a checkpoint and the directory sync that makes it
+// durable, say. op is one of create, createtrunc, open, writeat, sync,
+// truncate, remove, rename, syncdir.
+//
+// When it fires, the disk crashes and then panics with simPowerCut, because
+// the store must not run on past the point the power went.
+func (d *simDisk) CrashAtNth(op string, n int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.crashAt = &simCrashPoint{op: op, n: n}
+}
+
+// tick counts an operation and fires the armed crash point if this is the one.
+// Caller holds d.mu.
+func (d *simDisk) tick(op string) {
+	c := d.crashAt
+	if c == nil || c.op != op {
+		return
+	}
+	c.n--
+	if c.n > 0 {
+		return
+	}
+	d.crashAt = nil
+	d.crashLocked()
+	panic(simPowerCut{op: op})
 }
 
 // FaultNextSync arms a fault for the next Sync on name.
 func (d *simDisk) FaultNextSync(name string, f simFault) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.faults[name] = &f
+	if ino, ok := d.dirLive[name]; ok {
+		d.faults[ino] = &f
+	}
+}
+
+// FailNext arms an error for the next call to op on name. accept is how many
+// bytes a failing WriteAt takes before giving up; it is ignored elsewhere.
+func (d *simDisk) FailNext(name, op string, accept int, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ino, ok := d.dirLive[name]; ok {
+		d.errs[simErrKey{ino: ino, op: op}] = &simErr{accept: accept, err: err}
+	}
+}
+
+// takeErr returns and disarms the error armed for op on ino, if any. Caller
+// holds d.mu.
+func (d *simDisk) takeErr(ino int, op string) *simErr {
+	k := simErrKey{ino: ino, op: op}
+	e := d.errs[k]
+	if e != nil {
+		delete(d.errs, k)
+	}
+	return e
 }
 
 // DurableBytes is what would be on the platter if the power went right now.
 func (d *simDisk) DurableBytes(name string) []byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return append([]byte(nil), d.durable[name]...)
+	ino, ok := d.dirLive[name]
+	if !ok {
+		return nil
+	}
+	return append([]byte(nil), d.durable[ino]...)
 }
 
-// Names lists every file the disk holds, sorted.
+// Names lists every file a running process can see, sorted.
 func (d *simDisk) Names() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]string, 0, len(d.durable))
-	for n := range d.durable {
+	out := make([]string, 0, len(d.dirLive))
+	for n := range d.dirLive {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DurableNames is what the DIRECTORY on the platter holds - what a process
+// reopening after a power cut finds, which is not the same list as Names()
+// until syncDir has been called.
+func (d *simDisk) DurableNames() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, 0, len(d.dirDurable))
+	for n := range d.dirDurable {
 		out = append(out, n)
 	}
 	sort.Strings(out)
@@ -169,9 +355,17 @@ func (d *simDisk) Clone() *simDisk {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := newSimDisk()
-	for k, v := range d.durable {
-		out.durable[k] = append([]byte(nil), v...)
-		out.linked[k] = d.linked[k]
+	remap := map[int]int{}
+	for name, ino := range d.dirDurable {
+		ni, ok := remap[ino]
+		if !ok {
+			out.nextIno++
+			ni = out.nextIno
+			remap[ino] = ni
+			out.durable[ni] = append([]byte(nil), d.durable[ino]...)
+		}
+		out.dirDurable[name] = ni
+		out.dirLive[name] = ni
 	}
 	return out
 }
@@ -184,13 +378,32 @@ func (d *simDisk) Syncs() int {
 	return d.syncs
 }
 
-// view is durable overlaid with everything still pending. Caller holds d.mu.
-func (d *simDisk) view(name string) []byte {
-	out := append([]byte(nil), d.durable[name]...)
-	for _, p := range d.pending[name] {
+// DirSyncs is how many times the directory was actually fsynced.
+func (d *simDisk) DirSyncs() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dirSyncs
+}
+
+// view is what this file looks like to a running process: the platter, with
+// any staged truncation applied, with everything still pending written over
+// the top. Caller holds d.mu.
+func (d *simDisk) view(ino int) []byte {
+	out := append([]byte(nil), d.durable[ino]...)
+	if t := d.trunc[ino]; t != nil {
+		out = resize(out, *t)
+	}
+	for _, p := range d.pending[ino] {
 		out = applyPage(out, p.off, p.data)
 	}
 	return out
+}
+
+func resize(buf []byte, size int64) []byte {
+	if int64(len(buf)) > size {
+		return buf[:size]
+	}
+	return applyPage(buf, size, nil)
 }
 
 // applyPage writes data at off, zero-filling any gap. A real filesystem does
@@ -205,11 +418,22 @@ func applyPage(dst []byte, off int64, data []byte) []byte {
 	return dst
 }
 
-func (d *simDisk) writeAt(name string, p []byte, off int64) (int, error) {
+func (d *simDisk) writeAt(ino int, p []byte, off int64) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.durable[name]; !ok {
-		return 0, &os.PathError{Op: "writeat", Path: name, Err: os.ErrNotExist}
+	if _, ok := d.durable[ino]; !ok {
+		return 0, &os.PathError{Op: "writeat", Path: d.nameOf(ino), Err: os.ErrNotExist}
+	}
+	var failErr error
+	if e := d.takeErr(ino, "writeat"); e != nil {
+		// A short write takes the first accept bytes and reports the failure.
+		// (*os.File).WriteAt loops internally, so a caller only ever sees this
+		// when the underlying write really could not finish - ENOSPC part way
+		// through a batch is the ordinary way to get here.
+		if e.accept < len(p) {
+			p = p[:e.accept]
+		}
+		failErr = e.err
 	}
 	// Split on absolute page boundaries, so the pieces line up with the units
 	// a device would actually commit.
@@ -219,20 +443,24 @@ func (d *simDisk) writeAt(name string, p []byte, off int64) (int, error) {
 		if n > len(p) {
 			n = len(p)
 		}
-		d.pending[name] = append(d.pending[name], simPage{off: off, data: append([]byte(nil), p[:n]...)})
+		d.pending[ino] = append(d.pending[ino], simPage{off: off, data: append([]byte(nil), p[:n]...)})
 		off += int64(n)
 		p = p[n:]
 	}
-	return total, nil
+	d.tick("writeat")
+	return total, failErr
 }
 
-func (d *simDisk) readAt(name string, p []byte, off int64) (int, error) {
+func (d *simDisk) readAt(ino int, p []byte, off int64) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.durable[name]; !ok {
-		return 0, &os.PathError{Op: "readat", Path: name, Err: os.ErrNotExist}
+	if _, ok := d.durable[ino]; !ok {
+		return 0, &os.PathError{Op: "readat", Path: d.nameOf(ino), Err: os.ErrNotExist}
 	}
-	content := d.view(name)
+	if e := d.takeErr(ino, "readat"); e != nil {
+		return 0, e.err
+	}
+	content := d.view(ino)
 	if off >= int64(len(content)) {
 		return 0, io.EOF
 	}
@@ -243,20 +471,37 @@ func (d *simDisk) readAt(name string, p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// sync promotes this file's pending pages, applying any armed fault.
+// sync promotes this file's staged truncation and its pending pages, applying
+// any armed fault.
 //
 // It always clears the pending queue, fault or no fault: the pages a fault
 // drops are pages the power cut caught in flight, and they are never coming.
-func (d *simDisk) sync(name string) error {
+// A failing fsync clears it too, and that is not an oversight - Linux reports
+// a writeback error once and drops the dirty pages, so a caller that retries
+// gets a success over data that never landed. Modelling the friendlier version
+// would flatter the store.
+func (d *simDisk) sync(ino int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.durable[name]; !ok {
-		return &os.PathError{Op: "fsync", Path: name, Err: os.ErrNotExist}
+	if _, ok := d.durable[ino]; !ok {
+		return &os.PathError{Op: "fsync", Path: d.nameOf(ino), Err: os.ErrNotExist}
 	}
 	d.syncs++
 
-	pages := d.pending[name]
-	delete(d.pending, name)
+	pages := d.pending[ino]
+	delete(d.pending, ino)
+	staged := d.trunc[ino]
+	delete(d.trunc, ino)
+
+	if e := d.takeErr(ino, "sync"); e != nil {
+		d.tick("sync")
+		return e.err
+	}
+
+	content := d.durable[ino]
+	if staged != nil {
+		content = resize(content, *staged)
+	}
 
 	order := make([]int, len(pages))
 	for i := range order {
@@ -265,8 +510,8 @@ func (d *simDisk) sync(name string) error {
 	stop := len(pages)
 	tear := -1
 
-	if f := d.faults[name]; f != nil {
-		delete(d.faults, name)
+	if f := d.faults[ino]; f != nil {
+		delete(d.faults, ino)
 		if f.reverse {
 			for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
 				order[i], order[j] = order[j], order[i]
@@ -281,7 +526,6 @@ func (d *simDisk) sync(name string) error {
 		stop = len(order)
 	}
 
-	content := d.durable[name]
 	for i := range stop {
 		p := pages[order[i]]
 		data := p.data
@@ -290,34 +534,43 @@ func (d *simDisk) sync(name string) error {
 		}
 		content = applyPage(content, p.off, data)
 	}
-	d.durable[name] = content
+	d.durable[ino] = content
+	d.tick("sync")
 	return nil
 }
 
-func (d *simDisk) truncate(name string, size int64) error {
+// truncate stages a new length. The length is inode metadata: this process
+// reads the shortened file at once, and the platter keeps the old length until
+// an fsync on this descriptor promotes it.
+func (d *simDisk) truncate(ino int, size int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	content, ok := d.durable[name]
-	if !ok {
-		return &os.PathError{Op: "truncate", Path: name, Err: os.ErrNotExist}
+	if _, ok := d.durable[ino]; !ok {
+		return &os.PathError{Op: "truncate", Path: d.nameOf(ino), Err: os.ErrNotExist}
 	}
-	// The store only ever truncates a freshly opened handle and fsyncs
-	// immediately afterwards, so there is nothing pending to reconcile and the
-	// simple model is exact here: cut the durable content, drop anything
-	// pending beyond the new size.
-	if int64(len(content)) > size {
-		d.durable[name] = content[:size]
-	} else {
-		d.durable[name] = applyPage(content, size, nil)
+	if e := d.takeErr(ino, "truncate"); e != nil {
+		return e.err
 	}
-	kept := d.pending[name][:0]
-	for _, p := range d.pending[name] {
+	d.trunc[ino] = &size
+	kept := d.pending[ino][:0]
+	for _, p := range d.pending[ino] {
 		if p.off+int64(len(p.data)) <= size {
 			kept = append(kept, p)
 		}
 	}
-	d.pending[name] = kept
+	d.pending[ino] = kept
+	d.tick("truncate")
 	return nil
+}
+
+// nameOf is for error messages only. Caller holds d.mu.
+func (d *simDisk) nameOf(ino int) string {
+	for n, i := range d.dirLive {
+		if i == ino {
+			return n
+		}
+	}
+	return "(unlinked)"
 }
 
 // simFS is the fileSystem view of a simDisk.
@@ -333,102 +586,118 @@ func (s simFS) ensureDir() error { return nil }
 func (s simFS) create(name string) (file, error) {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	if _, ok := s.disk.durable[name]; ok {
+	if _, ok := s.disk.dirLive[name]; ok {
 		return nil, &os.PathError{Op: "create", Path: name, Err: os.ErrExist}
 	}
-	s.disk.durable[name] = nil
+	ino := s.disk.newInoLocked()
 	// A brand new directory entry, and not a durable one until syncDir.
-	s.disk.linked[name] = false
-	return simFile{disk: s.disk, name: name}, nil
+	s.disk.dirLive[name] = ino
+	s.disk.tick("create")
+	return simFile{disk: s.disk, ino: ino}, nil
 }
 
 func (s simFS) createTrunc(name string) (file, error) {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	if _, ok := s.disk.durable[name]; !ok {
-		s.disk.linked[name] = false
+	ino, ok := s.disk.dirLive[name]
+	if !ok {
+		ino = s.disk.newInoLocked()
+		s.disk.dirLive[name] = ino
+	} else {
+		zero := int64(0)
+		s.disk.trunc[ino] = &zero
+		delete(s.disk.pending, ino)
 	}
-	s.disk.durable[name] = nil
-	delete(s.disk.pending, name)
-	return simFile{disk: s.disk, name: name}, nil
+	s.disk.tick("createtrunc")
+	return simFile{disk: s.disk, ino: ino}, nil
+}
+
+func (d *simDisk) newInoLocked() int {
+	d.nextIno++
+	d.durable[d.nextIno] = nil
+	return d.nextIno
 }
 
 func (s simFS) open(name string) (file, error) {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	if _, ok := s.disk.durable[name]; !ok {
+	ino, ok := s.disk.dirLive[name]
+	if !ok {
 		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
 	}
-	return simFile{disk: s.disk, name: name}, nil
+	s.disk.tick("open")
+	return simFile{disk: s.disk, ino: ino}, nil
 }
 
 func (s simFS) size(name string) (int64, error) {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	if _, ok := s.disk.durable[name]; !ok {
+	ino, ok := s.disk.dirLive[name]
+	if !ok {
 		return 0, &os.PathError{Op: "stat", Path: name, Err: os.ErrNotExist}
 	}
-	return int64(len(s.disk.view(name))), nil
+	return int64(len(s.disk.view(ino))), nil
 }
 
 func (s simFS) list() ([]string, error) { return s.disk.Names(), nil }
 
+// remove unlinks the name. The bytes stay where they are: the entry on the
+// platter still points at them until syncDir, and a power cut before that
+// brings the file back.
 func (s simFS) remove(name string) error {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	if _, ok := s.disk.durable[name]; !ok {
+	if _, ok := s.disk.dirLive[name]; !ok {
 		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
 	}
-	delete(s.disk.durable, name)
-	delete(s.disk.pending, name)
-	delete(s.disk.linked, name)
+	delete(s.disk.dirLive, name)
+	s.disk.tick("remove")
 	return nil
 }
 
+// rename moves a directory entry and does not touch the file's data at all,
+// which is why contents are keyed by inode here. Atomic with respect to a
+// reader, and not durable until syncDir.
 func (s simFS) rename(from, to string) error {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
-	content, ok := s.disk.durable[from]
+	ino, ok := s.disk.dirLive[from]
 	if !ok {
 		return &os.PathError{Op: "rename", Path: from, Err: os.ErrNotExist}
 	}
-	// Rename carries the pending layer with it, because on a real filesystem
-	// it moves a directory entry and does not touch the file's data at all.
-	s.disk.durable[to] = content
-	s.disk.pending[to] = s.disk.pending[from]
-	s.disk.linked[to] = true
-	delete(s.disk.durable, from)
-	delete(s.disk.pending, from)
-	delete(s.disk.linked, from)
+	s.disk.dirLive[to] = ino
+	delete(s.disk.dirLive, from)
+	s.disk.tick("rename")
 	return nil
 }
 
-// syncDir makes every directory entry durable. Until this is called, a file
-// created since the last one does not survive Crash().
+// syncDir makes the directory durable: every create, rename and remove issued
+// since the last call is on the platter when this returns, and not before.
 func (s simFS) syncDir() error {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
 	s.disk.dirSyncs++
-	for name := range s.disk.linked {
-		s.disk.linked[name] = true
-	}
+	s.disk.dirDurable = cloneDir(s.disk.dirLive)
+	s.disk.collectLocked()
+	s.disk.tick("syncdir")
 	return nil
 }
 
-// simFile is one open handle. Handles on the same name share the disk's state,
-// exactly as two descriptors on one file do.
+// simFile is one open handle. Handles on the same file share the disk's state,
+// exactly as two descriptors on one inode do - including across a rename,
+// which is the point of holding the inode rather than the name.
 type simFile struct {
 	disk *simDisk
-	name string
+	ino  int
 }
 
 func (f simFile) WriteAt(p []byte, off int64) (int, error) {
-	return f.disk.writeAt(f.name, p, off)
+	return f.disk.writeAt(f.ino, p, off)
 }
 
-func (f simFile) ReadAt(p []byte, off int64) (int, error) { return f.disk.readAt(f.name, p, off) }
-func (f simFile) Sync() error                             { return f.disk.sync(f.name) }
-func (f simFile) Truncate(size int64) error               { return f.disk.truncate(f.name, size) }
+func (f simFile) ReadAt(p []byte, off int64) (int, error) { return f.disk.readAt(f.ino, p, off) }
+func (f simFile) Sync() error                             { return f.disk.sync(f.ino) }
+func (f simFile) Truncate(size int64) error               { return f.disk.truncate(f.ino, size) }
 func (f simFile) Close() error                            { return nil }
 
 // findSimSegment returns the name of the live log segment, whatever it is
