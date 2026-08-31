@@ -18,6 +18,12 @@ import (
 // os.Args[0] with the seed in the environment; the copy that starts up finds
 // it here, runs the schedule and never reaches a single test.
 func TestMain(m *testing.M) {
+	// A fake child, if this process was started as one. See supervision_test.go:
+	// these modes exist only in the test binary and are how the harness's own
+	// bounds get reached in seconds instead of in minutes.
+	if mode := os.Getenv(envFakeChild); mode != "" {
+		os.Exit(runFakeChild(mode))
+	}
 	ran, err := crashtest.ChildFromEnv()
 	if ran {
 		if err != nil {

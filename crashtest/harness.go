@@ -71,6 +71,68 @@ const (
 	childTimeout = 60 * time.Second
 )
 
+// Supervision bounds one seed's run. The zero value means the defaults, which
+// is what the corpus uses; a test that needs to reach a bound in seconds
+// rather than in minutes sets its own.
+//
+// The bounds are here rather than as constants because a bound nothing can
+// reach is a bound nothing has checked. Reaching childTimeout for real takes a
+// minute per case and a child that misbehaves on purpose.
+type Supervision struct {
+	// Idle is how long the harness waits without progress before it gives up
+	// on a child.
+	Idle time.Duration
+	// Wall is the outer bound on one seed, whatever the child is doing.
+	Wall time.Duration
+	// Drain is how long the harness waits for the child's output pipe to close
+	// after the kill.
+	Drain time.Duration
+}
+
+// DefaultSupervision is what the corpus runs with.
+func DefaultSupervision() Supervision {
+	return Supervision{Idle: childTimeout, Wall: 3 * time.Minute, Drain: 20 * time.Second}
+}
+
+func (s Supervision) withDefaults() Supervision {
+	d := DefaultSupervision()
+	if s.Idle <= 0 {
+		s.Idle = d.Idle
+	}
+	if s.Wall <= 0 {
+		s.Wall = d.Wall
+	}
+	if s.Drain <= 0 {
+		s.Drain = d.Drain
+	}
+	return s
+}
+
+// Ceiling is the longest one seed can take before the harness gives up on it:
+// the wall-clock bound, plus the two drain waits that follow a kill. A caller
+// with a deadline of its own uses this to decide whether there is room to start
+// another seed - see the corpus reconciliation in crash_test.go.
+func (s Supervision) Ceiling() time.Duration {
+	s = s.withDefaults()
+	return s.Wall + 2*s.Drain
+}
+
+// KillPlan is the randomised kill point for a seed: how many acknowledgements
+// the child gets before the signal, and the delay after the last of them.
+//
+// It is a pure function of the seed and it is the one the harness uses - the
+// plan for any seed can therefore be computed without running it, which is
+// what makes "the seed is printed on every run" worth anything.
+func KillPlan(seed uint64) (afterAcks int, jitter time.Duration) {
+	rng := rand.New(rand.NewPCG(seed, killPlanStream))
+	return 5 + rng.IntN(DefaultMaxOps-200), time.Duration(rng.IntN(3000)) * time.Microsecond
+}
+
+// killPlanStream is the second half of the PCG seed. It is written down rather
+// than derived so that changing it is a visible act: every recorded kill point
+// in docs/verification.md is a function of it.
+const killPlanStream = 0xA5A5A5A5A5A5A5A5
+
 // CheckpointBytesFor picks the child's checkpoint bound from its seed, between
 // 256 bytes and 16KB.
 //
@@ -202,6 +264,16 @@ type Result struct {
 	FinishedFree bool // the child ran out of schedule before it could be killed
 	Report       kvstore.RecoveryReport
 
+	// Observed is true when this seed produced a verdict: the child ran, the
+	// harness read its acknowledgements to the end, and the directory it left
+	// behind was checked.
+	//
+	// It exists because the alternative to a verdict is not a failure, it is
+	// nothing at all - a seed the harness gave up on has no findings, and
+	// OK() would report it as passing. The corpus counts observations, not
+	// attempts, and this is the field that distinguishes them.
+	Observed bool
+
 	// CheckpointBytes is the bound this seed gave the child.
 	CheckpointBytes int64
 
@@ -213,7 +285,8 @@ type Result struct {
 	Failures []string
 }
 
-// OK reports whether this seed passed.
+// OK reports whether this seed passed. It is only meaningful when Observed is
+// true: a seed that produced no observation has no failures either.
 func (r Result) OK() bool { return len(r.Failures) == 0 }
 
 // Kinds returns the sorted, deduplicated failure categories - what a
@@ -255,6 +328,9 @@ func (r Result) String() string {
 type Child struct {
 	Argv []string
 	Env  []string
+
+	// Supervision bounds this child. The zero value is DefaultSupervision.
+	Supervision Supervision
 }
 
 // RunSeed forks the child, kills it at the offset this seed dictates, and
@@ -265,12 +341,12 @@ func RunSeed(child Child, seed uint64, dir string) (Result, error) {
 	}
 
 	// Everything about this seed's run, decided before the child starts.
-	rng := rand.New(rand.NewPCG(seed, 0xA5A5A5A5A5A5A5A5))
+	afterAcks, jitter := KillPlan(seed)
 	res := Result{
 		Seed:            seed,
 		Dir:             dir,
-		KillAfterAcks:   5 + rng.IntN(DefaultMaxOps-200),
-		KillJitter:      time.Duration(rng.IntN(3000)) * time.Microsecond,
+		KillAfterAcks:   afterAcks,
+		KillJitter:      jitter,
 		CheckpointBytes: CheckpointBytesFor(seed),
 	}
 
@@ -280,6 +356,7 @@ func RunSeed(child Child, seed uint64, dir string) (Result, error) {
 	if err := verify(&res); err != nil {
 		return res, err
 	}
+	res.Observed = true
 	return res, nil
 }
 
@@ -359,10 +436,12 @@ func ReplayCase(caseDir string) (Result, error) {
 	if err := verify(&res); err != nil {
 		return res, err
 	}
+	res.Observed = true
 	return res, nil
 }
 
 func runAndKill(child Child, seed uint64, dir string, res *Result) error {
+	sup := child.Supervision.withDefaults()
 	cmd := exec.Command(child.Argv[0], child.Argv[1:]...)
 	cmd.Env = append(os.Environ(),
 		EnvSeed+"="+fmt.Sprint(seed),
@@ -414,11 +493,11 @@ func runAndKill(child Child, seed uint64, dir string, res *Result) error {
 		}
 	case <-done:
 		res.FinishedFree = true
-	case <-time.After(childTimeout):
+	case <-time.After(sup.Idle):
 		_ = cmd.Process.Kill()
 		<-done
 		_ = cmd.Wait()
-		return fmt.Errorf("crashtest: child for seed %d produced no output for %s", res.Seed, childTimeout)
+		return fmt.Errorf("crashtest: child for seed %d produced no output for %s", res.Seed, sup.Idle)
 	}
 
 	<-done
