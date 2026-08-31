@@ -299,10 +299,52 @@ still exist. It is not implemented.
 the invariant behind it: a segment is only ever removed after the checkpoint that
 supersedes it is on disk, so there is no instant at which neither holds the data.
 
+### The directory sync that was removed, and why that is not a shortcut
+
+`writeCheckpoint` used to fsync the directory twice - once between creating
+`CHECKPOINT.tmp` and renaming it over `CHECKPOINT`, and once after the rename.
+The first was removed. Deleting a durability call because no test fails on it is
+one inch from deleting it because it was inconvenient, and the two look the same
+in a diff, so the argument is written out here to be argued with.
+
+**The window.** A crash after `createTrunc` and before the fsync that follows
+the rename. Crashing at each call in that window, under both versions, leaves
+exactly these directories on the platter - measured through the simulated disk,
+not reasoned about:
+
+| crash point | one dir fsync | two dir fsyncs |
+|---|---|---|
+| end of `rename` | `LOG.…0` | `CHECKPOINT.tmp`, `LOG.…0` |
+| end of the fsync after it | `CHECKPOINT`, `LOG.…0` | `CHECKPOINT.tmp`, `LOG.…0` |
+
+**Why both are safe.** In this window the checkpoint has not been *installed*:
+`writeCheckpoint` has not returned, so `checkpointLocked` has not rotated the log
+and has not unlinked one segment. Recovery therefore finds either checkpoint and
+the complete log, and replays it. A stray `CHECKPOINT.tmp` is not read by
+`loadCheckpoint`, is not a segment name, and is truncated away by the next
+`createTrunc`. The one state that would be dangerous - the new name durable over
+contents that are not - is prevented by the `f.Sync()` before the rename, not by
+any directory sync. And the rename cannot become durable without the create,
+because both are writes to the same directory and there would be no entry for
+`rename(2)` to move: which is what makes one post-rename fsync sufficient, and is
+the canonical write-tmp, fsync-tmp, rename, fsync-dir recipe rather than anything
+invented here.
+
+**What cannot be checked.** No test here distinguishes one directory sync from
+two. Both pass, and the whole suite passes under both, because the only
+difference is a file no reader consults. That is a real gap and it is not closed.
+What is checked instead is the premise the argument stands on:
+`TestAPowerCutAnywhereInTheCheckpointPathLosesNothing` takes the power out at the
+end of every one of the ten filesystem calls the checkpoint path makes, one run
+per call, and requires every acknowledged key to be readable afterwards. Invert
+the ordering in `checkpointLocked` so segments are unlinked before the checkpoint
+is durable and five of those ten fail, naming the keys that went.
+
 ## Red proofs
 
 Every case in `verify/kvstore.task.json` was observed failing before it passed,
-with one declared exception, and the record is committed in
+with three declared exceptions listed at the end of this section, and the record
+is committed in
 `.general-harness/redproof.json` - the test name that failed, when, and against
 which version of the contract. A test that has never been seen to fail has not
 been shown to be wired to anything.
@@ -327,11 +369,25 @@ These lines have each been deleted, with the suite run against the result:
 | `fsys.syncDir()` in `createSegment` | `TestANewSegmentsDirectoryEntryIsMadeDurable`, and most of the suite |
 | `fsys.syncDir()` after the checkpoint rename | `TestTheCheckpointIsDurableAsSoonAsItIsInstalled` |
 | `s.fsys.syncDir()` after unlinking superseded segments | `TestACheckpointStillBoundsTheLogAfterAPowerCut` |
-| `f.Truncate(validBytes)` in `reopenSegment` | `TestATornPageLeavesEveryAcknowledgedWriteRecoverable` |
+| the write offset in `reopenSegment` (`wrote: validBytes` becomes `wrote: size`) | `TestATornPageLeavesEveryAcknowledgedWriteRecoverable` |
+| `f.Truncate(validBytes)` in `reopenSegment`, on its own | `TestAStoreWhoseSegmentFailedReopensAndResumes`, and nothing else - see the correction below |
 | `f.Sync()` in `writeCheckpoint` | `TestCheckpointedStateSurvivesASimulatedPowerCut` |
 | `readErr = err` in `readAll` (`file.go`) | `TestARecoveryReadFailureIsReportedRatherThanTakenAsTheEndOfTheLog` |
 | `os.O_EXCL` in `osFS.create` | `TestCreatingAFileThatAlreadyExistsFails` |
 | the crc reseed in `record.go` | `TestRecordFromAnotherChainIsRejected` |
+
+One row in that table used to be wrong and is corrected above. It read
+`f.Truncate(validBytes)` against the torn-page test, from the deliberately
+broken commit `15d3c1b`. That commit deletes two things, not one: the truncation
+*and* the write offset, which it moves from `validBytes` to `size`. The offset is
+what the torn-page test catches - appends here are positional, so with
+`wrote: validBytes` the next record is written at the tear and over it whatever
+the file's length is. Deleting the `Truncate` alone left the entire suite green,
+root package and 240-seed corpus both, until
+`TestAStoreWhoseSegmentFailedReopensAndResumes` began checking the segment's
+length against what recovery vouched for. The call stays: it is what keeps a
+segment from carrying an abandoned record's tail around for the rest of its life,
+which is a narrower claim than the one the code comment used to make.
 
 And two that were deleted and did **not** turn anything red, which is why they
 are here:
@@ -341,7 +397,15 @@ are here:
 | `f.Sync()` after the truncation in `reopenSegment` | nothing. The next append's fsync promotes the staged length anyway, so the only window is a store that recovers from a tear and then crashes without writing - and that crash loses nothing, because recovery truncates again. |
 | `fsys.syncDir()` after removing unreachable segments (`store.go`) | nothing. Those segments hold no record recovery can reach. |
 
-The one contract case declared a guard rather than a probe is the out-of-order
-flush test, which has no honest red proof because this store never had a
-scanning recovery to break. Manufacturing one to have something to catch would
-be manufacturing evidence.
+Three contract cases are declared guards rather than probes, which means they
+carry no red proof and are never counted as proven:
+
+- the out-of-order flush test, because this store never had a scanning recovery
+  to break;
+- the failed-write test, which is green on any implementation the failed-sync
+  and short-write tests are also green on - a write that took no bytes leaves no
+  gap to write past;
+- the lifted-segment test, which records a limitation rather than a guarantee,
+  so there is no implementation for it to catch.
+
+Manufacturing a red for any of them would be manufacturing evidence.

@@ -94,11 +94,44 @@ func loadCheckpoint(fsys fileSystem) (*checkpoint, bool) {
 // TestTheCheckpointIsDurableAsSoonAsItIsInstalled fails without.
 //
 // There used to be a fourth step, a directory sync between the fsync and the
-// rename, to make the temporary name itself durable first. It is gone. One
-// fsync on the directory after the rename makes the whole of the directory
-// state durable, the create included, so the earlier one changed nothing that
-// any crash could observe - and no test could be written that failed when it
-// was removed. See the commit that took it out.
+// rename, to make the temporary name itself durable first. It is gone, and
+// because removing an fsync and removing an inconvenience look identical in a
+// diff, here is the whole argument rather than the conclusion.
+//
+// The window it covered is a crash after createTrunc and before the sync that
+// follows the rename. What the platter can hold at that moment, with only the
+// one directory sync, is: the old CHECKPOINT (or none), no CHECKPOINT.tmp
+// entry, and every log segment. What it holds with the extra sync is the same
+// thing plus a stray CHECKPOINT.tmp. That is the entire difference, and it was
+// measured, not assumed - crashing at rename, at the sync after it, and at the
+// sync after that, under both versions, produces those directory listings and
+// no others.
+//
+// Neither state loses anything, and the reason is that the checkpoint has not
+// been INSTALLED in this window: writeCheckpoint has not returned, so
+// checkpointLocked has not rotated the log and has not unlinked a single
+// segment. Recovery therefore finds the old checkpoint and the complete log
+// and replays it. A stray CHECKPOINT.tmp is not read by loadCheckpoint, is not
+// a segment name, and is truncated away by the next createTrunc. The one state
+// that WOULD be dangerous - the new name durable over contents that are not -
+// is prevented by f.Sync() above, before the rename, not by any directory
+// sync.
+//
+// The rename cannot become durable without the create, because both are writes
+// to the same directory and a filesystem that journals them cannot commit the
+// second without the first: there would be no entry for rename(2) to move.
+// That is what makes one post-rename fsync sufficient, and it is the canonical
+// write-tmp, fsync-tmp, rename, fsync-dir recipe rather than anything invented
+// here.
+//
+// No test in this repository distinguishes one directory sync from two - both
+// pass, including the crash-at-every-call test below - because the difference
+// is a stray file no reader consults.
+// TestAPowerCutAnywhereInTheCheckpointPathLosesNothing checks the premise the
+// argument stands on instead: that a power cut at any call this path makes
+// leaves every acknowledged write readable. Invert the ordering in
+// checkpointLocked so segments are removed before the checkpoint is durable
+// and it fails at five of its ten crash points, naming the keys that went.
 func writeCheckpoint(fsys fileSystem, seq uint64, payload []byte) error {
 	f, err := fsys.createTrunc(checkpointTempName)
 	if err != nil {

@@ -611,3 +611,98 @@ func TestTheCheckpointIsDurableAsSoonAsItIsInstalled(t *testing.T) {
 		}
 	}
 }
+
+// B6, and the premise that the argument for removing a directory sync rests
+// on.
+//
+// writeCheckpoint used to fsync the directory twice: once between creating the
+// temporary file and renaming it over the real name, and once after. The first
+// was backed out at b4565c5, on the argument that one fsync on the directory
+// after the rename makes the whole of the directory state durable - the create
+// included - so no crash could ever observe the earlier one.
+//
+// This test does NOT decide that question, and saying so is the point. It
+// passes with one directory sync and it passes with two, because the two
+// differ only in whether a stray CHECKPOINT.tmp is left on the platter, and
+// nothing a store can observe after a crash depends on that. What it does is
+// turn the argument's PREMISE from prose into an observation. The premise is
+// that a power cut anywhere inside the checkpoint path loses nothing, because
+// the checkpoint is not installed until writeCheckpoint returns and no segment
+// is deleted until after that - so the store either comes back with the old
+// checkpoint and every segment, or the new checkpoint and every segment, and
+// both replay to the same keys.
+//
+// So the power is taken out at the end of every filesystem call the checkpoint
+// path makes, one run per call, and every key acknowledged before it has to
+// still be readable afterwards. The counts below are relative: CrashAtNth
+// counts calls made after it is armed, and it is armed immediately before
+// Checkpoint() is called, so this list is also a description of the syscalls
+// that path issues and in what order.
+func TestAPowerCutAnywhereInTheCheckpointPathLosesNothing(t *testing.T) {
+	points := []struct {
+		op   string
+		n    int
+		what string
+	}{
+		{"createtrunc", 1, "the temporary checkpoint file has just been created"},
+		{"writeat", 1, "the checkpoint's bytes have been handed to the file"},
+		{"sync", 1, "the checkpoint's bytes are durable, under the temporary name"},
+		{"rename", 1, "the checkpoint is installed and the directory entry is not durable"},
+		{"syncdir", 1, "the installed checkpoint is durable"},
+		{"create", 1, "the segment that follows the checkpoint exists"},
+		{"sync", 2, "that segment's contents are durable"},
+		{"syncdir", 2, "that segment's name is durable"},
+		{"remove", 1, "a superseded segment has been unlinked"},
+		{"syncdir", 3, "the unlinks are durable"},
+	}
+
+	for _, p := range points {
+		t.Run(fmt.Sprintf("%s-%d", p.op, p.n), func(t *testing.T) {
+			disk := newSimDisk()
+			// Large enough that nothing checkpoints on its own: the only
+			// checkpoint in this test is the one called below, so the call
+			// counts above mean what they say.
+			s, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 1 << 20, fsys: disk.FS("sim")})
+			if err != nil {
+				t.Fatalf("OpenWith: %v", err)
+			}
+
+			acked := map[string]string{}
+			for i := range 50 {
+				k := fmt.Sprintf("k%03d", i)
+				v := fmt.Sprintf("v%03d", i)
+				if err := s.Put(k, []byte(v)); err != nil {
+					t.Fatalf("Put(%s): %v", k, err)
+				}
+				acked[k] = v
+			}
+			if s.Stats().Checkpoints != 0 {
+				t.Fatal("the store checkpointed on its own, so the call counts below no longer describe the path this test crashes inside")
+			}
+
+			disk.CrashAtNth(p.op, p.n)
+			op, cut := runUntilPowerCut(t, func() { _ = s.Checkpoint() })
+			if !cut {
+				t.Fatalf("the checkpoint path never reached call %d to %s, so nothing was crashed when %s", p.n, p.op, p.what)
+			}
+			if op != p.op {
+				t.Fatalf("the power went at %q, want %q", op, p.op)
+			}
+
+			reopened, err := OpenWith(Options{Dir: "sim", CheckpointBytes: 1 << 20, fsys: disk.FS("sim")})
+			if err != nil {
+				t.Fatalf("reopening after the power cut when %s: %v", p.what, err)
+			}
+			defer func() { _ = reopened.Close() }()
+
+			for k, v := range acked {
+				if got, ok := reopened.Get(k); !ok || string(got) != v {
+					t.Fatalf("acknowledged key %q = %q, %v after the power cut when %s; want %q, true", k, got, ok, p.what, v)
+				}
+			}
+			if reopened.Len() != len(acked) {
+				t.Errorf("the reopened store holds %d keys, want %d", reopened.Len(), len(acked))
+			}
+		})
+	}
+}
