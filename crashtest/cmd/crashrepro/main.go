@@ -38,7 +38,8 @@ func main() {
 		return
 	}
 
-	seed := flag.Uint64("seed", 0, "the seed to reproduce")
+	seed := flag.Uint64("seed", 0, "re-run this seed: same schedule, same intended kill point")
+	replay := flag.String("replay", "", "re-check a crash directory preserved by a failing run: same bytes, same verdict, every time")
 	keep := flag.String("dir", "", "keep the crashed store in this directory instead of a temporary one")
 	writeCorpus := flag.String("write-corpus", "", "regenerate the seed corpus into this file and exit")
 	flag.Parse()
@@ -46,6 +47,19 @@ func main() {
 	if *writeCorpus != "" {
 		if err := regenerate(*writeCorpus); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *replay != "" {
+		res, err := crashtest.ReplayCase(*replay)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "replay error:", err)
+			os.Exit(2)
+		}
+		report(res, *replay)
+		if !res.OK() {
 			os.Exit(1)
 		}
 		return
@@ -80,6 +94,13 @@ func main() {
 		os.Exit(2)
 	}
 
+	report(res, dir)
+	if !res.OK() {
+		os.Exit(1)
+	}
+}
+
+func report(res crashtest.Result, dir string) {
 	fmt.Printf("seed          %d\n", res.Seed)
 	fmt.Printf("kill point    after %d acknowledgements, plus %s\n", res.KillAfterAcks, res.KillJitter)
 	fmt.Printf("acknowledged  %d operations before the process died\n", res.Acked)
@@ -94,7 +115,6 @@ func main() {
 	for _, f := range res.Failures {
 		fmt.Println("             ", f)
 	}
-	os.Exit(1)
 }
 
 func regenerate(path string) error {

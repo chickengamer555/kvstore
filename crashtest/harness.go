@@ -29,15 +29,21 @@
 package crashtest
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chickengamer555/kvstore"
@@ -47,9 +53,10 @@ import (
 // EnvSeed set is a child and must run the schedule instead of whatever it
 // would normally do.
 const (
-	EnvSeed   = "KV_CRASH_SEED"
-	EnvDir    = "KV_CRASH_DIR"
-	EnvMaxOps = "KV_CRASH_MAXOPS"
+	EnvSeed            = "KV_CRASH_SEED"
+	EnvDir             = "KV_CRASH_DIR"
+	EnvMaxOps          = "KV_CRASH_MAXOPS"
+	EnvCheckpointBytes = "KV_CRASH_CHECKPOINT_BYTES"
 )
 
 const (
@@ -57,14 +64,27 @@ const (
 	// terminates. Every seed in the corpus is killed long before this.
 	DefaultMaxOps = 600
 
-	// CheckpointBytes is small on purpose. Checkpointing is the one path that
-	// deletes data deliberately, so it is where crash-safety bugs concentrate;
-	// a bound this small means the corpus kills children inside a checkpoint
-	// regularly rather than by luck.
-	CheckpointBytes = 16 << 10
-
 	childTimeout = 60 * time.Second
 )
+
+// CheckpointBytesFor picks the child's checkpoint bound from its seed, between
+// 256 bytes and 16KB.
+//
+// This is here because of a measurement, not a guess. With a single fixed
+// bound of 2KB, 240 seeds produced exactly one child killed inside a
+// checkpoint and none killed between a checkpoint and the deletion of the
+// segments it replaced - which are precisely the windows the checkpoint code
+// exists to be safe in. The reason is that the store spends almost all of its
+// wall time blocked in fsync on the ordinary write path, so that is where a
+// randomly timed signal lands.
+//
+// Varying the bound with the seed means a good share of the corpus runs a
+// child that spends most of its life checkpointing, without any crash point
+// being placed by hand. The offset is still random; what changes is how much
+// of the child's time is spent in the code worth interrupting.
+func CheckpointBytesFor(seed uint64) int64 {
+	return 256 << (seed % 7)
+}
 
 // Op is one operation in a seeded schedule.
 type Op struct {
@@ -107,8 +127,8 @@ func OpAt(seed uint64, i int) Op {
 // survive the process being killed microseconds later; a bufio.Writer here
 // would lose exactly the lines that matter most and would make the store look
 // better than it is.
-func RunChild(dir string, seed uint64, maxOps int, ack io.Writer) error {
-	s, err := kvstore.OpenWith(kvstore.Options{Dir: dir, CheckpointBytes: CheckpointBytes})
+func RunChild(dir string, seed uint64, maxOps int, checkpointBytes int64, ack io.Writer) error {
+	s, err := kvstore.OpenWith(kvstore.Options{Dir: dir, CheckpointBytes: checkpointBytes})
 	if err != nil {
 		return fmt.Errorf("child: opening store: %w", err)
 	}
@@ -153,7 +173,13 @@ func ChildFromEnv() (bool, error) {
 			return true, fmt.Errorf("child: bad %s=%q: %w", EnvMaxOps, raw, err)
 		}
 	}
-	return true, RunChild(dir, seed, maxOps, os.Stdout)
+	checkpointBytes := CheckpointBytesFor(seed)
+	if raw := os.Getenv(EnvCheckpointBytes); raw != "" {
+		if _, err := fmt.Sscan(raw, &checkpointBytes); err != nil {
+			return true, fmt.Errorf("child: bad %s=%q: %w", EnvCheckpointBytes, raw, err)
+		}
+	}
+	return true, RunChild(dir, seed, maxOps, checkpointBytes, os.Stdout)
 }
 
 // Result is what one seed produced.
@@ -171,6 +197,14 @@ type Result struct {
 	Acked        int
 	FinishedFree bool // the child ran out of schedule before it could be killed
 	Report       kvstore.RecoveryReport
+
+	// CheckpointBytes is the bound this seed gave the child.
+	CheckpointBytes int64
+
+	// KilledInCheckpointWrite is true when a half-written CHECKPOINT.tmp was
+	// left behind, which only happens if the signal landed between creating
+	// that file and renaming it into place.
+	KilledInCheckpointWrite bool
 
 	Failures []string
 }
@@ -213,11 +247,267 @@ type Child struct {
 
 // RunSeed forks the child, kills it at the offset this seed dictates, and
 // checks the directory it left behind.
-//
-// Not implemented yet - crashtest/crash_test.go says what it has to do.
 func RunSeed(child Child, seed uint64, dir string) (Result, error) {
-	_, _, _ = child, seed, dir
-	return Result{}, errors.New("crashtest: RunSeed is not implemented")
+	if len(child.Argv) == 0 {
+		return Result{}, errors.New("crashtest: no child executable")
+	}
+
+	// Everything about this seed's run, decided before the child starts.
+	rng := rand.New(rand.NewPCG(seed, 0xA5A5A5A5A5A5A5A5))
+	res := Result{
+		Seed:            seed,
+		Dir:             dir,
+		KillAfterAcks:   5 + rng.IntN(DefaultMaxOps-200),
+		KillJitter:      time.Duration(rng.IntN(3000)) * time.Microsecond,
+		CheckpointBytes: CheckpointBytesFor(seed),
+	}
+
+	if err := runAndKill(child, seed, dir, &res); err != nil {
+		return res, err
+	}
+	if err := verify(&res); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// CaseFile is the small manifest written beside a preserved crash, holding the
+// two numbers needed to check those bytes again: which schedule produced them
+// and how far it got.
+const CaseFile = "crashcase.txt"
+
+// Preserve copies the crashed directory somewhere it will survive, together
+// with the manifest ReplayCase needs.
+//
+// This is the half of reproduction that is exact. Re-running a seed reproduces
+// the schedule and the intended kill point but not the instruction the signal
+// lands on, so it reproduces a failure most of the time and not always.
+// Replaying these bytes reproduces the identical failure every time, for as
+// long as the directory exists - which is what you actually want at the point
+// where you are trying to fix something.
+func (r Result) Preserve(root string) (string, error) {
+	caseDir := filepath.Join(root, fmt.Sprintf("seed-%d", r.Seed))
+	if err := copyDir(r.Dir, filepath.Join(caseDir, "store")); err != nil {
+		return "", err
+	}
+	manifest := fmt.Sprintf(`seed %d
+acked %d
+killAfterAcks %d
+checkpointBytes %d
+`,
+		r.Seed, r.Acked, r.KillAfterAcks, r.CheckpointBytes)
+	if err := os.WriteFile(filepath.Join(caseDir, CaseFile), []byte(manifest), 0o644); err != nil {
+		return "", err
+	}
+	return caseDir, nil
+}
+
+// ReplayCase re-runs the checks over a directory preserved by Preserve.
+//
+// It works on a copy, because opening a store repairs the directory it opens -
+// truncating a torn tail, dropping unreachable segments - and a crash case you
+// can only examine once is not much of a crash case.
+func ReplayCase(caseDir string) (Result, error) {
+	manifest, err := os.ReadFile(filepath.Join(caseDir, CaseFile))
+	if err != nil {
+		return Result{}, fmt.Errorf("crashtest: reading the case manifest: %w", err)
+	}
+	res := Result{}
+	sc := bufio.NewScanner(bytes.NewReader(manifest))
+	for sc.Scan() {
+		line := sc.Text()
+		var name string
+		var value uint64
+		if _, err := fmt.Sscan(line, &name, &value); err != nil {
+			continue
+		}
+		switch name {
+		case "seed":
+			res.Seed = value
+		case "acked":
+			res.Acked = int(value)
+		case "killAfterAcks":
+			res.KillAfterAcks = int(value)
+		case "checkpointBytes":
+			res.CheckpointBytes = int64(value)
+		}
+	}
+
+	scratch, err := os.MkdirTemp("", "kvstore-replay-")
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	defer func() { _ = os.RemoveAll(scratch + ".twin") }()
+
+	res.Dir = filepath.Join(scratch, "store")
+	if err := copyDir(filepath.Join(caseDir, "store"), res.Dir); err != nil {
+		return res, err
+	}
+	if err := verify(&res); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+func runAndKill(child Child, seed uint64, dir string, res *Result) error {
+	cmd := exec.Command(child.Argv[0], child.Argv[1:]...)
+	cmd.Env = append(os.Environ(),
+		EnvSeed+"="+fmt.Sprint(seed),
+		EnvDir+"="+dir,
+		EnvMaxOps+"="+fmt.Sprint(DefaultMaxOps),
+		EnvCheckpointBytes+"="+fmt.Sprint(CheckpointBytesFor(seed)),
+	)
+	cmd.Env = append(cmd.Env, child.Env...)
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("crashtest: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("crashtest: starting child: %w", err)
+	}
+
+	var acked atomic.Int64
+	reached := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		var once sync.Once
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if !strings.HasPrefix(sc.Text(), "ack ") {
+				continue
+			}
+			if int(acked.Add(1)) >= res.KillAfterAcks {
+				once.Do(func() { close(reached) })
+			}
+		}
+		// A read error here is the pipe closing because the child was killed,
+		// which is the expected end of every run in the corpus.
+	}()
+
+	select {
+	case <-reached:
+		// The randomised part. The signal lands somewhere inside the next
+		// operation or two - possibly between the write and the fsync,
+		// possibly inside a checkpoint's rename, possibly between two of the
+		// segment deletions. That is the point: those are the offsets nobody
+		// thinks to place a crash at by hand.
+		time.Sleep(res.KillJitter)
+		if err := cmd.Process.Kill(); err != nil {
+			return fmt.Errorf("crashtest: killing child: %w", err)
+		}
+	case <-done:
+		res.FinishedFree = true
+	case <-time.After(childTimeout):
+		_ = cmd.Process.Kill()
+		<-done
+		_ = cmd.Wait()
+		return fmt.Errorf("crashtest: child for seed %d produced no output for %s", res.Seed, childTimeout)
+	}
+
+	<-done
+	// Wait always reports "killed" here, which is the intended outcome, so its
+	// error is not a failure of the run. A child that failed for a real reason
+	// printed to stderr, which is inherited.
+	_ = cmd.Wait()
+
+	res.Acked = int(acked.Load())
+	return nil
+}
+
+// verify reopens the crashed directory and checks B1, B3 and B4.
+func verify(res *Result) error {
+	// The acknowledged prefix, folded exactly as the store should have.
+	want := map[string][]byte{}
+	for i := range res.Acked {
+		op := OpAt(res.Seed, i)
+		if op.Delete {
+			delete(want, op.Key)
+			continue
+		}
+		want[op.Key] = op.Value
+	}
+
+	// Exactly one operation can have been in flight when the process died,
+	// because the child does them one at a time and waits for each to be
+	// acknowledged. That one key is allowed to be in either state; every other
+	// key is not.
+	inflight := OpAt(res.Seed, res.Acked)
+
+	// B4 first, and over two independent first-replays rather than a replay
+	// and a re-replay: the first Open repairs the directory (truncating a torn
+	// tail, dropping unreachable segments), so opening twice in a row would
+	// compare a crashed directory against a repaired one.
+	if _, err := os.Stat(filepath.Join(res.Dir, "CHECKPOINT.tmp")); err == nil {
+		res.KilledInCheckpointWrite = true
+	}
+
+	twin := res.Dir + ".twin"
+	if err := copyDir(res.Dir, twin); err != nil {
+		return fmt.Errorf("crashtest: copying the crashed directory: %w", err)
+	}
+
+	s, err := kvstore.Open(res.Dir)
+	if err != nil {
+		res.Failures = append(res.Failures, "recovery-error: "+err.Error())
+		return nil
+	}
+	defer func() { _ = s.Close() }()
+	res.Report = s.Recovery()
+
+	twinStore, err := kvstore.Open(twin)
+	if err != nil {
+		res.Failures = append(res.Failures, "recovery-error-on-twin: "+err.Error())
+		return nil
+	}
+	defer func() { _ = twinStore.Close() }()
+
+	if !bytes.Equal(s.Snapshot(), twinStore.Snapshot()) {
+		res.Failures = append(res.Failures, "nondeterministic-recovery: two replays of the same crashed directory produced different state")
+	}
+
+	// B1: every acknowledged write is present and correct.
+	for key, value := range want {
+		got, ok := s.Get(key)
+		if key == inflight.Key {
+			if !ok && !inflight.Delete {
+				res.Failures = append(res.Failures, fmt.Sprintf("acked-write-lost: %s (in-flight key, absent)", key))
+			} else if ok && !bytes.Equal(got, value) && !bytes.Equal(got, inflight.Value) {
+				res.Failures = append(res.Failures, fmt.Sprintf("corrupt-read: %s holds neither the acknowledged value nor the in-flight one", key))
+			}
+			continue
+		}
+		if !ok {
+			res.Failures = append(res.Failures, fmt.Sprintf("acked-write-lost: %s", key))
+			continue
+		}
+		if !bytes.Equal(got, value) {
+			res.Failures = append(res.Failures, fmt.Sprintf("corrupt-read: %s holds %d bytes that are not the acknowledged value", key, len(got)))
+		}
+	}
+
+	// B3, the other direction: nothing may come back that was never written.
+	// Only the in-flight operation can add a key the acknowledged prefix does
+	// not have.
+	for i := range 600 {
+		key := fmt.Sprintf("k%04d", i)
+		if _, expected := want[key]; expected {
+			continue
+		}
+		got, ok := s.Get(key)
+		if !ok {
+			continue
+		}
+		if key == inflight.Key && !inflight.Delete && bytes.Equal(got, inflight.Value) {
+			continue
+		}
+		res.Failures = append(res.Failures, fmt.Sprintf("phantom-read: %s was never acknowledged but holds %d bytes", key, len(got)))
+	}
+	return nil
 }
 
 func copyDir(src, dst string) error {
