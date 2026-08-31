@@ -127,11 +127,20 @@ func createSegment(fsys fileSystem, base uint64, trace func(string, string)) (*w
 // reopenSegment reopens an existing segment for append, truncating it to the
 // last byte recovery was able to vouch for.
 //
-// The truncation is not optional. A crash leaves a torn record at the end of
-// the file; appending after it would put every future record beyond a point
-// where recovery stops, so they would be written, fsynced, acknowledged and
-// then never read again. Cutting the file back to validBytes is what makes the
-// log usable after the crash it was designed to survive.
+// Two separate things keep a torn tail from swallowing later writes, and this
+// comment used to run them together. The one that carries the guarantee is
+// `wrote: validBytes` below: appends here are positional, so the next record
+// is written AT the tear and over it, never after it. Nothing lands beyond the
+// point recovery stops at, whatever the file's length happens to be.
+//
+// The Truncate is the second thing, and what it buys is narrower than this
+// comment used to claim: the file's length agrees with the log's live end, so
+// no reader has to re-derive that the bytes past it are junk, and a segment
+// does not carry the tail of an abandoned record around for the rest of its
+// life. That was measured rather than assumed - with the truncation deleted
+// the whole suite stayed green until
+// TestAStoreWhoseSegmentFailedReopensAndResumes checked the length, because
+// the checksum chain refuses the stale bytes on its own.
 func reopenSegment(fsys fileSystem, base uint64, seq uint64, crc uint32, validBytes int64, trace func(string, string)) (*wal, error) {
 	name := segmentName(base)
 	path := fsys.path(name)
