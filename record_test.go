@@ -3,6 +3,7 @@ package kvstore
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"testing"
 )
 
@@ -306,4 +307,75 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// rechainKeyLen rewrites the key-length field of the record starting at `start`
+// and recomputes that record's chained checksum so the record still verifies.
+//
+// The point of a test on keyLen is that the checksum PASSES: keyLen is read
+// after the checksum has vouched for the bytes, so a keyLen that disagrees with
+// the payload is not corruption in the usual sense. It is either a record
+// written by a build this one does not understand, or a length field that was
+// scribbled on and then re-checksummed by a crash that happened to land that
+// way. Either way decodeRecord has to survive it, and a test that let the
+// checksum fail would never reach the line it is about.
+//
+// `prevCRC` is the checksum the record at `start` chains to - for the second
+// record of a log built by buildLog that is the first record's stored crc.
+func rechainKeyLen(buf []byte, start int, prevCRC uint32, keyLen uint32) {
+	binary.LittleEndian.PutUint32(buf[start+17:], keyLen)
+	total := headerSize + int(binary.LittleEndian.Uint32(buf[start+4:]))
+	crc := crc32.Update(prevCRC, castagnoli, buf[start+4:start+total])
+	binary.LittleEndian.PutUint32(buf[start:], crc)
+}
+
+// B3. The key-length field is the second value decodeRecord reads off disk and
+// converts to an int, and it needs the same treatment as the first one.
+//
+// This line was the one line a reviewer could delete with the whole root suite
+// still green, which is the definition of an untested guard. It is also the
+// same defect as the length field four lines above it: `keyLen > payload`
+// compares an int converted from an on-disk uint32, and where int is 32 bits
+// `int(0x80000000)` is -2147483648, which is not greater than anything. The
+// guard passes and `body[:keyLen]` slices with a negative bound - a panic
+// inside recovery, on precisely the input recovery exists to survive.
+//
+//	amd64:  keyLen = 2147483648   keyLen > payload = true    rejected
+//	386:    keyLen = -2147483648  keyLen > payload = false   panic
+//
+// The first two cases fail on any architecture with the guard removed; the
+// third fails only where int is 32 bits, and it is why this test is run under
+// `GOARCH=386 go test -count=1 .` as well as under the ordinary gate. B3 says a
+// record failing a check ends recovery at that point. A panic is not ending
+// recovery.
+func TestAKeyLengthPastThePayloadIsATornTail(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		keyLen uint32
+	}{
+		{"one byte past the payload", 14},
+		{"far past the payload, inside the buffer", 9999},
+		{"the high bit set, which is a negative int where int is 32 bits", 0x80000000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, offsets := buildLog(t, []uint64{1, 2})
+			payload := binary.LittleEndian.Uint32(buf[offsets[1]+4:])
+			if tc.keyLen <= payload {
+				t.Fatalf("staging: record 2 claims a payload of %d and this case sets keyLen to %d, which is not past it - the case is not testing what it says", payload, tc.keyLen)
+			}
+			rechainKeyLen(buf, offsets[1], binary.LittleEndian.Uint32(buf[0:]), tc.keyLen)
+
+			got, reason, consumed := collect(buf)
+
+			if reason != stopTornRecord {
+				t.Fatalf("a record whose checksum passes and whose key length is %#x stopped replay for reason %q, want %q", tc.keyLen, reason, stopTornRecord)
+			}
+			if want := []string{keyN(1)}; !equalStrings(appliedKeys(got), want) {
+				t.Fatalf("applied %v, want %v - recovery must stop at the last record it understands", appliedKeys(got), want)
+			}
+			if consumed != offsets[1] {
+				t.Errorf("consumed %d bytes, want %d", consumed, offsets[1])
+			}
+		})
+	}
 }
