@@ -33,24 +33,41 @@ const simPageSize = 512
 // never leaves the pending layer, so the simulated power cut takes it and the
 // reopened store has never heard of the key.
 //
+// A newly created file gets the same treatment one level up. Its contents can
+// be made durable by fsyncing it, but the directory entry that names it lives
+// in the parent's metadata and is no more durable than any unsynced write
+// until syncDir is called. Until then a power cut leaves the contents on the
+// platter with nothing pointing at them, which is indistinguishable from the
+// file never having existed - and is precisely the failure syncdir_unix.go
+// exists to prevent. Here that is the `linked` map, and Crash() deletes every
+// file that is not linked.
+//
 // What it models:
 //   - file contents, and which of them survive a power cut
+//   - the directory entry of a newly created file, and whether it survives
 //   - a write made durable in pieces, in an order the store did not choose
 //   - a page that was only partly on the platter when the power went
 //
 // What it deliberately does NOT model, so that no test here over-claims:
-// namespace operations - create, rename, remove - take effect in the durable
-// layer immediately. Nothing in this file therefore says anything about
-// directory-entry durability, which is the other half of B2, a different
-// mechanism, and covered by TestDirFsyncOnLogCreate and by CI on Linux.
+// rename and remove take effect durably at once. Modelling a rename reverting
+// would mean keeping the superseded file, and the crash-during-checkpoint
+// window it would open is already covered by TestPartialCheckpointIsIgnored.
+//
+// And the standing caveat on all of it: this is a model of a filesystem where
+// the application owns directory-entry durability, which is POSIX. It says
+// what the store DOES - that it performs a directory sync at the point it has
+// to - not what NTFS does with the no-op it gets on Windows. That half is a
+// claim about the platform and is stated as one, in syncdir_windows.go.
 type simDisk struct {
 	mu      sync.Mutex
 	durable map[string][]byte
 	pending map[string][]simPage
+	linked  map[string]bool
 	faults  map[string]*simFault
 
-	syncs   int
-	crashes int
+	syncs    int
+	dirSyncs int
+	crashes  int
 }
 
 // simPage is one page-aligned chunk of an unsynced write, in the order the
@@ -92,6 +109,7 @@ func newSimDisk() *simDisk {
 	return &simDisk{
 		durable: map[string][]byte{},
 		pending: map[string][]simPage{},
+		linked:  map[string]bool{},
 		faults:  map[string]*simFault{},
 	}
 }
@@ -101,12 +119,19 @@ func newSimDisk() *simDisk {
 func (d *simDisk) FS(dir string) fileSystem { return simFS{disk: d, dir: dir} }
 
 // Crash discards every byte that has been written and not yet promoted by a
-// Sync, on every file. This is the power cut.
+// Sync, and every file whose directory entry was never made durable by a
+// syncDir. This is the power cut.
 func (d *simDisk) Crash() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.pending = map[string][]simPage{}
 	d.faults = map[string]*simFault{}
+	for name, linked := range d.linked {
+		if !linked {
+			delete(d.durable, name)
+			delete(d.linked, name)
+		}
+	}
 	d.crashes++
 }
 
@@ -146,6 +171,7 @@ func (d *simDisk) Clone() *simDisk {
 	out := newSimDisk()
 	for k, v := range d.durable {
 		out.durable[k] = append([]byte(nil), v...)
+		out.linked[k] = d.linked[k]
 	}
 	return out
 }
@@ -311,12 +337,17 @@ func (s simFS) create(name string) (file, error) {
 		return nil, &os.PathError{Op: "create", Path: name, Err: os.ErrExist}
 	}
 	s.disk.durable[name] = nil
+	// A brand new directory entry, and not a durable one until syncDir.
+	s.disk.linked[name] = false
 	return simFile{disk: s.disk, name: name}, nil
 }
 
 func (s simFS) createTrunc(name string) (file, error) {
 	s.disk.mu.Lock()
 	defer s.disk.mu.Unlock()
+	if _, ok := s.disk.durable[name]; !ok {
+		s.disk.linked[name] = false
+	}
 	s.disk.durable[name] = nil
 	delete(s.disk.pending, name)
 	return simFile{disk: s.disk, name: name}, nil
@@ -350,6 +381,7 @@ func (s simFS) remove(name string) error {
 	}
 	delete(s.disk.durable, name)
 	delete(s.disk.pending, name)
+	delete(s.disk.linked, name)
 	return nil
 }
 
@@ -364,12 +396,24 @@ func (s simFS) rename(from, to string) error {
 	// it moves a directory entry and does not touch the file's data at all.
 	s.disk.durable[to] = content
 	s.disk.pending[to] = s.disk.pending[from]
+	s.disk.linked[to] = true
 	delete(s.disk.durable, from)
 	delete(s.disk.pending, from)
+	delete(s.disk.linked, from)
 	return nil
 }
 
-func (s simFS) syncDir() error { return nil }
+// syncDir makes every directory entry durable. Until this is called, a file
+// created since the last one does not survive Crash().
+func (s simFS) syncDir() error {
+	s.disk.mu.Lock()
+	defer s.disk.mu.Unlock()
+	s.disk.dirSyncs++
+	for name := range s.disk.linked {
+		s.disk.linked[name] = true
+	}
+	return nil
+}
 
 // simFile is one open handle. Handles on the same name share the disk's state,
 // exactly as two descriptors on one file do.

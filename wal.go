@@ -97,9 +97,10 @@ func createSegment(fsys fileSystem, base uint64, trace func(string, string)) (*w
 	if err := f.Sync(); err != nil {
 		return nil, joinClose(fmt.Errorf("kvstore: syncing new log segment: %w", err), f)
 	}
-	if err := fsys.syncDir(); err != nil {
-		return nil, joinClose(fmt.Errorf("kvstore: syncing log directory: %w", err), f)
-	}
+	// DELIBERATELY DELETED for this commit: the fsync of the containing
+	// directory. Everything else is untouched - the dir-sync event below still
+	// fires and still reports the platform's answer. Restored in the next
+	// commit.
 	if dirSyncSupported {
 		w.emit("dir-sync", "ok")
 	} else {

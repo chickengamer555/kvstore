@@ -205,8 +205,8 @@
       "case": "acked-write-survives-a-power-cut",
       "key": "simulated-disk/acked-write-survives-a-power-cut",
       "matched_test": "TestAckedWriteSurvivesASimulatedPowerCut",
-      "failed_at": "2026-08-31T04:03:47.764Z",
-      "contract_hash": "23731c143a96aef97d9f8ba7f0db83d75c5069b2ac7cefdaa3704eb737981462",
+      "failed_at": "2026-08-31T04:15:30.599Z",
+      "contract_hash": "a7aaff3e9c0eb77099eea2ce94b530040bde034a61e01c292fd32ee5a2fe72d0",
       "gate_command": "go test ./...",
       "confidence": "exact"
     },
@@ -227,8 +227,19 @@
       "case": "torn-page-is-truncated-away-before-the-next-write",
       "key": "simulated-disk/torn-page-is-truncated-away-before-the-next-write",
       "matched_test": "TestATornPageLeavesEveryAcknowledgedWriteRecoverable",
-      "failed_at": "2026-08-31T04:07:38.503Z",
-      "contract_hash": "96316dae40dfbb7d512585803e5858707b102566e1a09d1626ab816468de3eeb",
+      "failed_at": "2026-08-31T04:18:44.604Z",
+      "contract_hash": "a7aaff3e9c0eb77099eea2ce94b530040bde034a61e01c292fd32ee5a2fe72d0",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "simulated-disk",
+      "case": "new-segments-directory-entry-is-made-durable",
+      "key": "simulated-disk/new-segments-directory-entry-is-made-durable",
+      "matched_test": "TestANewSegmentsDirectoryEntryIsMadeDurable",
+      "failed_at": "2026-08-31T04:15:30.599Z",
+      "contract_hash": "a7aaff3e9c0eb77099eea2ce94b530040bde034a61e01c292fd32ee5a2fe72d0",
       "gate_command": "go test ./...",
       "confidence": "exact"
     }

@@ -44,6 +44,12 @@ func TestSimDiskLosesWritesThatWereNeverSynced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	// Make the name durable first, so what follows is about the contents and
+	// nothing else. TestANewSegmentsDirectoryEntryIsMadeDurable covers the
+	// other layer.
+	if err := fsys.syncDir(); err != nil {
+		t.Fatalf("syncDir: %v", err)
+	}
 	if _, err := f.WriteAt([]byte("unsynced"), 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
@@ -82,6 +88,76 @@ func TestSimDiskLosesWritesThatWereNeverSynced(t *testing.T) {
 	}
 	if string(got) != "synced" {
 		t.Fatalf("after the power cut the synced file read back %q, want %q", got, "synced")
+	}
+}
+
+// B2, the other half: the directory entry naming a new log segment.
+//
+// Creating a file and fsyncing it makes its CONTENTS durable. It does not make
+// the entry that names it durable - that entry is the parent directory's own
+// metadata, and on ext4 with data=ordered it can still be sitting in the
+// journal when the power goes, leaving the file on the platter with nothing
+// pointing at it. syncdir_unix.go is the fsync(2) on the directory descriptor
+// that closes it, and until now the only test of it asserted that the store
+// emitted a "dir-sync" event.
+//
+// The simulated disk models the entry as its own layer: a created file is
+// readable at once but is deleted by Crash() unless syncDir has been called.
+// Remove `fsys.syncDir()` from createSegment and this test fails with the log
+// segment gone - see the red proof for
+// simulated-disk/new-segments-directory-entry-is-made-durable.
+//
+// One boundary, stated rather than glossed: this proves the store PERFORMS a
+// directory sync at the point it has to. Whether the platform's implementation
+// of that call makes the entry durable is the platform's business - a real
+// fsync(2) on POSIX, and a documented no-op on Windows where NTFS journals the
+// metadata itself. That half is a claim about NTFS and syncdir_windows.go says
+// so in those words.
+func TestANewSegmentsDirectoryEntryIsMadeDurable(t *testing.T) {
+	disk := newSimDisk()
+
+	// First, the simulator against itself: a file created and fsynced, with no
+	// directory sync, must not survive. Without this the test below would pass
+	// against a disk that never modelled the entry at all.
+	fsys := disk.FS("sim")
+	orphan, err := fsys.create("orphan")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := orphan.WriteAt([]byte("contents are durable"), 0); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	if err := orphan.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	disk.Crash()
+	for _, n := range disk.Names() {
+		if n == "orphan" {
+			t.Fatal("a file whose directory was never synced survived the power cut - the simulated disk is not modelling the directory entry, so the assertion below would be vacuous")
+		}
+	}
+
+	// Now the store. It creates a log segment, syncs it, and syncs the
+	// directory. Everything acknowledged afterwards has to come back.
+	s := openSim(t, disk)
+	if err := s.Put("alpha", []byte("one")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	disk.Crash()
+
+	segments := 0
+	for _, n := range disk.Names() {
+		if isSegmentName(n) {
+			segments++
+		}
+	}
+	if segments == 0 {
+		t.Fatal("the log segment is gone after the power cut - its directory entry was never made durable, so the file survived with no name and recovery cannot find it")
+	}
+
+	reopened := openSim(t, disk)
+	if got, ok := reopened.Get("alpha"); !ok || !bytes.Equal(got, []byte("one")) {
+		t.Errorf("Get(alpha) = %q, %v after the power cut; want %q, true", got, ok, "one")
 	}
 }
 
