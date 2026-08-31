@@ -403,6 +403,8 @@ These lines have each been deleted, with the suite run against the result:
 | `readErr = err` in `readAll` (`file.go`) | `TestARecoveryReadFailureIsReportedRatherThanTakenAsTheEndOfTheLog` |
 | `os.O_EXCL` in `osFS.create` | `TestCreatingAFileThatAlreadyExistsFails` |
 | the crc reseed in `record.go` | `TestRecordFromAnotherChainIsRejected` |
+| the `r.seq <= CheckpointSeq` skip in `loadDir` | `TestAStoppedReplayNeverReAppliesSupersededRecords`, on all ten keys and on the snapshot |
+| the `s.log.failed` guard at the top of `checkpointLocked` | `TestACheckpointNeverRotatesAwayFromAFailedSegment`, on two acknowledged keys missing after a clean reopen |
 
 One row in that table used to be wrong and is corrected above. It read
 `f.Truncate(validBytes)` against the torn-page test, from the deliberately
@@ -437,3 +439,90 @@ carry no red proof and are never counted as proven:
   so there is no implementation for it to catch.
 
 Manufacturing a red for any of them would be manufacturing evidence.
+
+### Every assertion on a report field, audited
+
+A reviewer deleted the `if r.seq <= st.report.CheckpointSeq` guard in `loadDir`.
+One test caught it - and caught it on `rep.Skipped == 0`, a counter the store
+fills in about itself. Downgrading that single `Fatalf` to a `Logf` left the
+sabotaged build passing the same test's data loop *and* its byte-for-byte
+snapshot comparison. Which is the fsync story again, two files along: the whole
+reason `v0.1.1` exists is that the evidence for the fsync was an event the store
+emitted and a counter the store incremented, and here was the same shape sitting
+untouched.
+
+The fair question is why the insight did not generalise the first time. It did
+not because the fix was aimed at *the fsync* rather than at *the shape*, and
+nothing went looking for the shape anywhere else. So this is that sweep: every
+assertion in the suite that reads a field the store or the harness reports about
+itself, and for each one, whether anything fails **on data** if the field is
+wrong.
+
+Three roles, and only the third is a problem.
+
+- **Precondition** - the assertion is about the *test's own setup*, not about the
+  store. `s.Stats().Checkpoints == 0` means "this test never reached the path it
+  is named for". Failing it means the test is inert, which is worth a hard stop,
+  and it makes no claim about correctness.
+- **Property with a data backstop** - the field is asserted, and the same defect
+  also breaks something a `Get` can see.
+- **Sole detector** - the field is the only thing that fires. Two of these
+  existed and both were changed this turn.
+
+| assertion | file | role | if the field lies, does data fail? |
+|---|---|---|---|
+| `rep.Skipped == 0` | `checkpoint_test.go` | precondition (relabelled this turn) | no, and it cannot - see below |
+| `Recovery().Segments > 2 && peak == 0` | `checkpoint_test.go` | precondition | n/a; the test's bound assertions are on directory bytes |
+| `!rep.UsedCheckpoint` | `checkpoint_test.go` | precondition | yes, the per-key loop below it |
+| `!rep.CheckpointRejected`, `rep.UsedCheckpoint` | `checkpoint_test.go` | property | **yes, measured** - disabling the checksum comparison in `loadCheckpoint` fails 22 data assertions in the same subtest alongside these two |
+| `r.Stopped != stopTornRecord` | `durability_test.go` | property | yes; `a`/`b`/`c` present and `d` absent are asserted first |
+| `Stats().Syncs - before != 1` (x2) | `durability_test.go` | **narration** | **no.** The trace assertion beside it is narration too. This is the pair the README's headline story is about; the backstop is the simulated disk, and as of this turn `Stats().Syncs` is checked against the disk's own count in `TestAckedWriteSurvivesASimulatedPowerCut` |
+| `Stats().Records != writers*perWriter` | `durability_test.go` | narration | no. The property it stands in for - no acknowledged write lost under concurrency - is asserted on data by `reopened.Len()` and the per-key loop immediately below, which are stronger |
+| `disk.Syncs() == 0` | `powercut_test.go` | precondition | the *disk's* counter, not the store's: a count taken outside the subject |
+| `disk.Syncs() == Stats().Syncs + 1` | `powercut_test.go` | **new this turn** | this is the line that makes the two `durability_test.go` assertions accountable |
+| `r.Stopped` (x3) | `powercut_test.go` | property | yes; each is preceded by per-key assertions, and the out-of-order case also compares two independent recoveries byte for byte |
+| `Stats().Checkpoints` (x4) | `powercut_test.go`, `segmentboundary_test.go` | precondition | n/a |
+| `!r.UsedCheckpoint` | `powercut_test.go` | was a **sole detector** | no, and nothing is lost in that window either way. Fixed this turn: the test now asks `disk.DurableNames()` what is on the platter before it asks the store, and that line fires on its own |
+| `r.Stopped != stopEndOfLog` | `segmentboundary_test.go` | records a limitation | the assertion below it names whose data came back |
+| `Kinds()`, `len(Failures)` | `crashtest/crash_test.go` | property | these are not store fields. A `Failure` is derived from a `Get`: `acked-write-lost`, `corrupt-read`, `phantom-read`, `nondeterministic-recovery`. The corpus's verdict is data |
+| `Shape()` reads four report fields | `crashtest/shape.go` | **descriptive** | nothing passes or fails on a shape. The tally says what the corpus reached; the verdict is decided by the findings above it |
+
+Two of those rows are worth reading properly.
+
+**`rep.Skipped` cannot be made to fail on data, and that is the answer.** The
+window the test stages - a crash after the checkpoint is durable and before the
+old segments are unlinked - is idempotent. The checkpoint is a fold of the
+complete prefix, so replaying a *suffix* of that prefix over it lands back on
+the same values, and a suffix is exactly what survives, because
+`checkpointLocked` unlinks oldest first and `loadDir` refuses a gap between
+segments. Under this store's own ordering the guard buys work, not correctness.
+The comment claiming it prevents "the exact bug that makes a crash during
+checkpointing corrupt a store" was more than the code does, and it has been
+downgraded to what is true.
+
+Where the guard *is* load-bearing is one step further out: if replay **stops**
+partway through the superseded range, what has been applied is a *prefix*, and a
+prefix puts back values the checkpoint already superseded.
+`TestAStoppedReplayNeverReAppliesSupersededRecords` builds that directory - a
+checkpoint at sequence 30 over a segment holding records 1..15 and then eight
+bytes of a record that never finished - and without the guard all ten keys come
+back stale, `k00`..`k04` to round 1 and `k05`..`k09` to round 0, plus the
+snapshot comparison. That directory is hand-built, and the test says so: it
+needs a torn tail in a segment that is not the last one, which the store does
+not produce. It is a log the *format* admits, and `loadDir` should not depend on
+an invariant maintained in `checkpoint.go` for the price of one comparison per
+record.
+
+**`Stats().Syncs` was under-documented rather than wrong.** Checking it against
+the disk's own count turned up a difference: three acknowledged `Put`s, three
+commit fsyncs counted by the store, four fsyncs seen by the disk. The fourth is
+`createSegment` fsyncing the empty segment file before a record is in it, which
+is not a commit. The assertion pins that relationship rather than asserting
+equality - making the counter's definition follow the disk would have been the
+wrong repair - and `Stats.Syncs` now documents which fsyncs it counts.
+
+What this audit does **not** establish: that no other assertion anywhere is
+weaker than it looks. It covers assertions on *report and counter fields*, found
+by grepping for `rep.`, `Stats()`, `Recovery()`, `Skipped`, `Applied`,
+`Dropped`, `Stopped`, `Syncs` and `Checkpoints`. An assertion that is
+tautological for some other reason would not show up in it.
