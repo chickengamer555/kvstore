@@ -186,7 +186,29 @@ func (s *Store) Checkpoint() error {
 // The invariant behind all four: a log segment is only ever removed after the
 // checkpoint that supersedes it is on disk. There is no window in which
 // neither holds the data.
+//
+// And a fifth step that comes before all of them, because rotating is the one
+// thing this store must not do while the live segment is poisoned. See the
+// guard below.
 func (s *Store) checkpointLocked() error {
+	if s.log.failed != nil {
+		// A segment whose commit failed has a tail recovery cannot vouch for,
+		// and until it is reopened nothing has cut that tail away. Rotating
+		// now moves s.log to a fresh segment and then trips over the failure
+		// on close, returning before a single unlink - so the poisoned segment
+		// stays on disk UNDERNEATH a successor the store is about to
+		// acknowledge writes into. The next Open stops at the tail, finds
+		// every later segment unreachable, and deletes them. Those writes are
+		// acknowledged, and no crash was needed to lose them.
+		//
+		// Refusing is enough because the refusal does not outlive the segment:
+		// reopening truncates the tail away and the caller gets its checkpoint
+		// then. Refusing is also all that is available here - truncating the
+		// live segment instead would mean writing to a file the store has
+		// already been told it cannot write to.
+		return fmt.Errorf("kvstore: refusing to checkpoint over a log segment whose last commit did not complete - reopen the store first: %w", s.log.failed)
+	}
+
 	seq := s.log.seq
 	if seq == s.log.base {
 		// Nothing has been written since the last checkpoint. Rotating here
