@@ -143,6 +143,61 @@
       "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
       "gate_command": "go test ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "seeded-corpus-no-acked-loss",
+      "key": "crash-harness/seeded-corpus-no-acked-loss",
+      "matched_test": "TestSeededCorpusNoAckedLoss",
+      "failed_at": "2026-08-31T02:28:48.609Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "kill-points-are-spread",
+      "key": "crash-harness/kill-points-are-spread",
+      "matched_test": "TestKillPointsAreSpread",
+      "failed_at": "2026-08-31T02:28:48.609Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "seed-reproduces-failure",
+      "key": "crash-harness/seed-reproduces-failure",
+      "matched_test": "TestSeedReproducesFailure",
+      "failed_at": "2026-08-31T02:28:48.609Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "corpus-size-floor",
+      "key": "crash-harness/corpus-size-floor",
+      "matched_test": "TestCorpusSizeFloor",
+      "failed_at": "2026-08-31T02:28:48.609Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "crash-corpus-recovery-is-deterministic",
+      "key": "crash-harness/crash-corpus-recovery-is-deterministic",
+      "matched_test": "TestCrashCorpusRecoveryIsDeterministic",
+      "failed_at": "2026-08-31T02:28:48.609Z",
+      "contract_hash": "94e1cf987dcc8903eb40d95af2c22a7638c10688c6123b3e802d71b439c54f32",
+      "gate_command": "go test ./...",
+      "confidence": "exact"
     }
   ]
 }

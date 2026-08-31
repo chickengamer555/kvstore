@@ -193,8 +193,11 @@ func (w *wal) close() error {
 		return nil
 	}
 	f := w.f
+	// finish() before the handle is dropped: in a build that buffers, this is
+	// where the buffer is written out, and it needs the file to still be here.
+	err := w.finish()
 	w.f = nil
-	if err := w.finish(); err != nil {
+	if err != nil {
 		return joinClose(err, f)
 	}
 	return f.Close()

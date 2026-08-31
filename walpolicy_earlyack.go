@@ -22,7 +22,7 @@ import "fmt"
 // What a process kill does catch is data that never left the process. So this
 // build does what somebody reaches for the first time they benchmark a WAL and
 // find it slow: it buffers records in user space and acknowledges the write
-// immediately, flushing every 64KB. Every one of those acknowledged-but-
+// immediately, flushing every 4KB. Every one of those acknowledged-but-
 // buffered records dies with the process.
 //
 // That limit is worth being clear about in both directions. The corpus proves
@@ -30,7 +30,7 @@ import "fmt"
 // fsync is doing its job; the ordering test and code review do that.
 const ackAfterSync = false
 
-const earlyAckFlushBytes = 64 << 10
+const earlyAckFlushBytes = 4 << 10
 
 func (w *wal) commit(enc []byte) (int, error) {
 	w.pending = append(w.pending, enc...)
