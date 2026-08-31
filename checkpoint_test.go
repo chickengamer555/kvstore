@@ -423,3 +423,73 @@ func copySegments(t *testing.T, dir string) map[string][]byte {
 	}
 	return out
 }
+
+// A limitation, pinned rather than guaranteed - the second test in this
+// repository of that kind, and it is here because it is the measurement behind
+// a premise the documentation was arguing from.
+//
+// checkpointLocked deletes superseded segments oldest first and syncs the
+// directory afterwards, so what a crash part way through leaves is a SUFFIX of
+// them. Two arguments lean on that: the one that downgrades the
+// superseded-record skip to "buys work, not correctness", and the row in
+// docs/verification.md saying the syncDir after those removals costs nothing.
+// Neither argument was ever measured against the alternative, so here is the
+// alternative.
+//
+// Leave a PREFIX instead - the oldest segment still on disk under a checkpoint
+// that covers it, with the live segment above the hole - and recovery stops at
+// the hole, exactly as the test above requires it to, and then OpenWith deletes
+// everything past the stop point. The ten records in the live segment were
+// acknowledged, are in no checkpoint, and are gone. No crash is involved.
+//
+// So the unlink order is not a tidiness preference, it is load-bearing, and
+// the reason it is load-bearing is that recovery DROPS what it cannot reach
+// rather than refusing to open. That is the open gap - the abut check turns a
+// missing file into a stop, and the drop turns the stop into deletion - and
+// this test is where it is written down. Closing it means loadDir refusing
+// rather than reporting a stop when the gap is between segments rather than at
+// the end of the last one, which changes when the store declines to open at
+// all and has the 240-seed corpus downstream of it. When that changes, this
+// test changes with it: it is a record of what happens today, not a
+// requirement that it keep happening.
+func TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites(t *testing.T) {
+	dir := t.TempDir()
+	firstSegment, _ := buildThreeRounds(t, dir)
+
+	// The checkpoint covering records 1..20 stays where it is. Put the segment
+	// based at 0 back underneath it: superseded, redundant, and in the way.
+	for name, content := range firstSegment {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatalf("restoring %s: %v", name, err)
+		}
+	}
+	if got := segmentBases(t, dir); len(got) != 2 || got[0] != 0 || got[1] != 20 {
+		t.Fatalf("staging: segments %v, want [0 20] under a checkpoint covering 20", got)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	lost := 0
+	for i := range 10 {
+		k := roundKey(i)
+		got, ok := reopened.Get(k)
+		if !ok {
+			t.Errorf("key %q is absent entirely; the checkpoint covering records 1..20 holds a value for every key", k)
+			continue
+		}
+		if string(got) == "round2-"+k {
+			continue
+		}
+		lost++
+	}
+	if lost != 10 {
+		t.Errorf("%d of 10 acknowledged records from the live segment were lost, not 10 - recovery's behaviour over a superseded segment left below a hole has CHANGED. If loadDir now refuses to open, or reaches the segment above the gap, that is an improvement and this test is what has to be rewritten to say so; do not delete it", lost)
+	}
+	if _, ok := reopened.Get(gapKey); !ok {
+		t.Errorf("key %q is in the checkpoint that covers records 1..20 and did not come back, so this test is not staging what it says it is", gapKey)
+	}
+}

@@ -53,10 +53,27 @@ type dirState struct {
 	active      uint64
 	activeBytes int64
 
-	// drop lists segments after the point recovery stopped. They are
-	// unreachable - the chain that would verify them is broken - so nothing in
-	// them can ever be replayed, and leaving them would only confuse the next
-	// recovery.
+	// drop lists segments after the point recovery stopped. OpenWith unlinks
+	// them.
+	//
+	// This comment used to say they are unreachable because "the chain that
+	// would verify them is broken", and that is true of the case it was
+	// written for and not true in general. When replay stops at a torn tail -
+	// what a power cut leaves, and what the corpus produces - the tail is in
+	// the newest segment and there is nothing after it, so the list is usually
+	// empty and never contains anything a reader could want.
+	//
+	// When replay stops at a GAP between segments it is a different matter.
+	// Each segment starts its own checksum chain, so a segment beyond a hole
+	// is perfectly verifiable on its own: recovery declines to reach it
+	// because it cannot account for what is missing underneath it, not because
+	// its bytes are broken. Deleting it is therefore a choice, and it is the
+	// step that turns a missing file into lost data.
+	// TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites is what
+	// that costs, measured: ten acknowledged records, no crash involved. It
+	// stays for now because refusing to open instead is a behaviour change
+	// with a 240-seed corpus downstream, and it is recorded rather than
+	// quietly true.
 	drop []uint64
 }
 

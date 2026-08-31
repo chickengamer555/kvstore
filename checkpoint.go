@@ -117,12 +117,20 @@ func loadCheckpoint(fsys fileSystem) (*checkpoint, bool) {
 // is prevented by f.Sync() above, before the rename, not by any directory
 // sync.
 //
-// The rename cannot become durable without the create, because both are writes
-// to the same directory and a filesystem that journals them cannot commit the
-// second without the first: there would be no entry for rename(2) to move.
-// That is what makes one post-rename fsync sufficient, and it is the canonical
+// The rename cannot become durable without the create: both are writes to the
+// same directory, and there would be no entry for rename(2) to move. That is
+// what makes one post-rename fsync sufficient, and it is the canonical
 // write-tmp, fsync-tmp, rename, fsync-dir recipe rather than anything invented
 // here.
+//
+// The premise there is filesystem-specific and the sentence used to hide it
+// behind the word "journals". On ext4 with the default data=ordered, and on
+// XFS, directory operations go through the journal in order and the second
+// cannot commit without the first. POSIX guarantees no such thing, and neither
+// does this repository's simulated disk, which promotes every pending
+// directory entry at once and so cannot stage the state that would falsify it.
+// So this is an argument about the two filesystems the CI runners use, not a
+// portable one, and nothing here tests it.
 //
 // No test in this repository distinguishes one directory sync from two - both
 // pass, including the crash-at-every-call test below - because the difference
