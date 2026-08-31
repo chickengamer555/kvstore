@@ -3,8 +3,6 @@ package kvstore
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -30,7 +28,21 @@ type Options struct {
 	// substitute for it - the fsync between sync-start and sync-return is a
 	// real fsync on a real file. Unexported because the event names are not a
 	// public contract.
+	//
+	// It is instrumentation and nothing more. An event is something the store
+	// says about itself, so no durability claim rests on one; that is what the
+	// fsys seam below is for.
 	trace func(name, detail string)
+
+	// fsys is where the store's files live. Nil - which is every build a
+	// caller can produce - selects the real filesystem rooted at Dir.
+	//
+	// The tests install a simulated disk instead, one that only makes bytes
+	// readable after a Sync and can then have the power taken away. That is
+	// what turns "the log was fsynced before the write was acknowledged" from
+	// something the store reports into something a test can catch it lying
+	// about. See file.go.
+	fsys fileSystem
 }
 
 // Stats are counters a caller can use to check the store is doing the work it
@@ -71,7 +83,7 @@ type RecoveryReport struct {
 // not.
 type Store struct {
 	mu     sync.RWMutex
-	dir    string
+	fsys   fileSystem
 	opts   Options
 	data   map[string][]byte
 	log    *wal
@@ -96,35 +108,39 @@ func OpenWith(opts Options) (*Store, error) {
 	if opts.CheckpointBytes == 0 {
 		opts.CheckpointBytes = defaultCheckpointBytes
 	}
-	if err := ensureDir(opts.Dir); err != nil {
+	fsys := opts.fsys
+	if fsys == nil {
+		fsys = osFS{dir: opts.Dir}
+	}
+	if err := fsys.ensureDir(); err != nil {
 		return nil, err
 	}
 
-	st, err := loadDir(opts.Dir)
+	st, err := loadDir(fsys)
 	if err != nil {
 		return nil, err
 	}
 
-	s := &Store{dir: opts.Dir, opts: opts, data: st.data, report: st.report}
+	s := &Store{fsys: fsys, opts: opts, data: st.data, report: st.report}
 
 	// Segments beyond the point recovery stopped are unreachable: the chain
 	// that would let us verify them is broken, so nothing in them can ever be
 	// replayed again. Leaving them would only confuse the next recovery.
 	if len(st.drop) > 0 {
 		for _, n := range st.drop {
-			if err := os.Remove(filepath.Join(opts.Dir, segmentName(n))); err != nil {
+			if err := fsys.remove(segmentName(n)); err != nil {
 				return nil, fmt.Errorf("kvstore: removing unreachable segment: %w", err)
 			}
 		}
-		if err := syncDir(opts.Dir); err != nil {
+		if err := fsys.syncDir(); err != nil {
 			return nil, fmt.Errorf("kvstore: syncing after removing unreachable segments: %w", err)
 		}
 	}
 
 	if st.segments == 0 {
-		s.log, err = createSegment(opts.Dir, 0, opts.trace)
+		s.log, err = createSegment(fsys, 0, opts.trace)
 	} else {
-		s.log, err = reopenSegment(opts.Dir, st.active, st.lastSeq, st.lastCRC, st.activeBytes, opts.trace)
+		s.log, err = reopenSegment(fsys, st.active, st.lastSeq, st.lastCRC, st.activeBytes, opts.trace)
 	}
 	if err != nil {
 		return nil, err
@@ -132,24 +148,6 @@ func OpenWith(opts Options) (*Store, error) {
 	s.stats.Records = int64(st.report.Applied)
 	s.stats.LogBytes = s.log.bytes
 	return s, nil
-}
-
-func ensureDir(dir string) error {
-	if _, err := os.Stat(dir); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("kvstore: checking store directory: %w", err)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("kvstore: creating store directory: %w", err)
-	}
-	// The directory we just created is itself a new entry in *its* parent, and
-	// that entry is no more durable than any other until the parent is synced.
-	// Same reasoning as for the log segments, one level up.
-	if err := syncDir(filepath.Dir(dir)); err != nil {
-		return fmt.Errorf("kvstore: syncing the parent of the store directory: %w", err)
-	}
-	return nil
 }
 
 func (s *Store) emit(name, detail string) {

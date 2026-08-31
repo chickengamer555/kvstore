@@ -18,10 +18,18 @@ const ackAfterSync = true
 // Everything in this function is one line long and the order of the four lines
 // is the whole clause. Write, then sync, then return. A caller that gets nil
 // back from here may believe the bytes are on the platter; a caller that got
-// nil back after only the Write would believe something that is not true, and
-// would find out on the next power cut rather than in a test.
+// nil back after only the WriteAt would believe something that is not true,
+// and would find out on the next power cut rather than in a test.
+//
+// The Sync below is load-bearing in a way that can be checked rather than
+// argued about. Delete it and TestAckedWriteSurvivesASimulatedPowerCut fails:
+// under the simulated disk nothing moves from the pending layer to the durable
+// one without it, so the record dies with the simulated power cut and the
+// reopened store has never heard of the key. That was not true before the file
+// seam existed - the whole suite stayed green - and it is why the seam is here.
 func (w *wal) commit(enc []byte) (int, error) {
-	n, err := w.f.Write(enc)
+	n, err := w.f.WriteAt(enc, w.wrote)
+	w.wrote += int64(n)
 	if err != nil {
 		return n, fmt.Errorf("kvstore: writing log records: %w", err)
 	}

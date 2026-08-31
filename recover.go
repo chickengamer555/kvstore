@@ -2,8 +2,6 @@ package kvstore
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -62,17 +60,14 @@ type dirState struct {
 	drop []uint64
 }
 
-func listSegments(dir string) ([]uint64, error) {
-	entries, err := os.ReadDir(dir)
+func listSegments(fsys fileSystem) ([]uint64, error) {
+	names, err := fsys.list()
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: reading store directory: %w", err)
 	}
 	var out []uint64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if base, ok := segmentBase(e.Name()); ok {
+	for _, name := range names {
+		if base, ok := segmentBase(name); ok {
 			out = append(out, base)
 		}
 	}
@@ -87,8 +82,8 @@ func listSegments(dir string) ([]uint64, error) {
 // bytes on disk. There is no map iteration, no time, no randomness and no
 // concurrency anywhere on this path, so two runs over the same directory apply
 // the same records in the same order and end in the same state.
-func loadDir(dir string) (*dirState, error) {
-	segs, err := listSegments(dir)
+func loadDir(fsys fileSystem) (*dirState, error) {
+	segs, err := listSegments(fsys)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +91,7 @@ func loadDir(dir string) (*dirState, error) {
 	st := &dirState{data: map[string][]byte{}, segments: len(segs)}
 	st.report.Segments = len(segs)
 
-	ckpt, rejected := loadCheckpoint(dir)
+	ckpt, rejected := loadCheckpoint(fsys)
 	st.report.CheckpointRejected = rejected
 	if ckpt != nil {
 		st.data = ckpt.data
@@ -120,7 +115,7 @@ func loadDir(dir string) (*dirState, error) {
 
 	for i, base := range segs {
 		name := segmentName(base)
-		buf, err := os.ReadFile(filepath.Join(dir, name))
+		buf, err := readAll(fsys, name)
 		if err != nil {
 			return nil, fmt.Errorf("kvstore: reading log segment %s: %w", name, err)
 		}

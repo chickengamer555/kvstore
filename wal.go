@@ -2,8 +2,6 @@ package kvstore
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -50,16 +48,24 @@ func isSegmentName(name string) bool {
 // the writer rather than re-reading the tail of the file means a write never
 // has to read.
 type wal struct {
-	dir     string
+	fsys    fileSystem
 	base    uint64
+	name    string
 	path    string
-	f       *os.File
+	f       file
 	seq     uint64
 	crc     uint32
 	bytes   int64
 	syncs   int64
 	trace   func(name, detail string)
 	scratch []byte
+
+	// wrote is the offset the next WriteAt goes to: how many bytes have been
+	// handed to the file. In every normal build it is equal to bytes, because
+	// commit writes each batch through as it arrives. In the deliberately
+	// broken kvearlyack build bytes runs ahead of it, and the difference is
+	// exactly the data that has been acknowledged and not written.
+	wrote int64
 
 	// pending exists only for the deliberately broken kvearlyack build, which
 	// buffers records in user space and acknowledges before they have reached
@@ -79,19 +85,19 @@ func (w *wal) emit(name, detail string) {
 // The last step is the one people leave out. Without it the file's contents are
 // durable and the directory entry naming the file is not, so a crash can leave
 // a store whose log exists on disk and has no name - see syncdir_unix.go.
-func createSegment(dir string, base uint64, trace func(string, string)) (*wal, error) {
-	path := filepath.Join(dir, segmentName(base))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
+func createSegment(fsys fileSystem, base uint64, trace func(string, string)) (*wal, error) {
+	name := segmentName(base)
+	f, err := fsys.create(name)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: creating log segment: %w", err)
 	}
-	w := &wal{dir: dir, base: base, path: path, f: f, seq: base, trace: trace}
-	w.emit("segment-create", path)
+	w := &wal{fsys: fsys, base: base, name: name, path: fsys.path(name), f: f, seq: base, trace: trace}
+	w.emit("segment-create", w.path)
 
 	if err := f.Sync(); err != nil {
 		return nil, joinClose(fmt.Errorf("kvstore: syncing new log segment: %w", err), f)
 	}
-	if err := syncDir(dir); err != nil {
+	if err := fsys.syncDir(); err != nil {
 		return nil, joinClose(fmt.Errorf("kvstore: syncing log directory: %w", err), f)
 	}
 	if dirSyncSupported {
@@ -110,29 +116,27 @@ func createSegment(dir string, base uint64, trace func(string, string)) (*wal, e
 // where recovery stops, so they would be written, fsynced, acknowledged and
 // then never read again. Cutting the file back to validBytes is what makes the
 // log usable after the crash it was designed to survive.
-func reopenSegment(dir string, base uint64, seq uint64, crc uint32, validBytes int64, trace func(string, string)) (*wal, error) {
-	path := filepath.Join(dir, segmentName(base))
-	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
+func reopenSegment(fsys fileSystem, base uint64, seq uint64, crc uint32, validBytes int64, trace func(string, string)) (*wal, error) {
+	name := segmentName(base)
+	path := fsys.path(name)
+	size, err := fsys.size(name)
+	if err != nil {
+		return nil, fmt.Errorf("kvstore: sizing log segment: %w", err)
+	}
+	f, err := fsys.open(name)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore: reopening log segment: %w", err)
 	}
-	info, err := f.Stat()
-	if err != nil {
-		return nil, joinClose(fmt.Errorf("kvstore: sizing log segment: %w", err), f)
-	}
-	if info.Size() != validBytes {
+	if size != validBytes {
 		if err := f.Truncate(validBytes); err != nil {
 			return nil, joinClose(fmt.Errorf("kvstore: truncating torn tail: %w", err), f)
 		}
 		if err := f.Sync(); err != nil {
 			return nil, joinClose(fmt.Errorf("kvstore: syncing after truncation: %w", err), f)
 		}
-		trace2(trace, "truncate", fmt.Sprintf("%s:%d->%d", path, info.Size(), validBytes))
+		trace2(trace, "truncate", fmt.Sprintf("%s:%d->%d", path, size, validBytes))
 	}
-	if _, err := f.Seek(validBytes, 0); err != nil {
-		return nil, joinClose(fmt.Errorf("kvstore: seeking to log tail: %w", err), f)
-	}
-	return &wal{dir: dir, base: base, path: path, f: f, seq: seq, crc: crc, bytes: validBytes, trace: trace}, nil
+	return &wal{fsys: fsys, base: base, name: name, path: path, f: f, seq: seq, crc: crc, bytes: validBytes, wrote: validBytes, trace: trace}, nil
 }
 
 func trace2(trace func(string, string), name, detail string) {
@@ -145,7 +149,7 @@ func trace2(trace func(string, string), name, detail string) {
 // error is deliberately discarded and only here: the caller is already on a
 // failure path, and replacing a real error with "close failed" loses the one
 // piece of information that explains what went wrong.
-func joinClose(err error, f *os.File) error {
+func joinClose(err error, f file) error {
 	if cerr := f.Close(); cerr != nil {
 		return fmt.Errorf("%w (and closing the file failed: %v)", err, cerr)
 	}

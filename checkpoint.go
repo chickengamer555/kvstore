@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"path/filepath"
 )
 
 // A checkpoint is the live key set, serialised, plus the sequence number it was
@@ -37,9 +36,6 @@ type checkpoint struct {
 	data map[string][]byte
 }
 
-func checkpointPath(dir string) string     { return filepath.Join(dir, checkpointName) }
-func checkpointTempPath(dir string) string { return filepath.Join(dir, checkpointTempName) }
-
 func encodeCheckpoint(seq uint64, payload []byte) []byte {
 	buf := make([]byte, checkpointHeaderSize, checkpointHeaderSize+len(payload))
 	copy(buf, checkpointMagic)
@@ -62,8 +58,8 @@ func encodeCheckpoint(seq uint64, payload []byte) []byte {
 // was one and it was rejected". Those produce the same recovered state and are
 // very different things to see in a report - the second one means a crash
 // landed inside a checkpoint, which is worth knowing.
-func loadCheckpoint(dir string) (*checkpoint, bool) {
-	raw, err := os.ReadFile(checkpointPath(dir))
+func loadCheckpoint(fsys fileSystem) (*checkpoint, bool) {
+	raw, err := readAll(fsys, checkpointName)
 	if err != nil {
 		// Anything unreadable is treated as absent. That includes a permission
 		// error, which is a stretch - but the log is authoritative either way,
@@ -94,13 +90,12 @@ func loadCheckpoint(dir string) (*checkpoint, bool) {
 // the whole old checkpoint or the whole new one and never a mixture - which is
 // what lets loadCheckpoint treat a bad checksum as "a crash happened during a
 // checkpoint" rather than "the store is corrupt".
-func writeCheckpoint(dir string, seq uint64, payload []byte) error {
-	tmp := checkpointTempPath(dir)
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+func writeCheckpoint(fsys fileSystem, seq uint64, payload []byte) error {
+	f, err := fsys.createTrunc(checkpointTempName)
 	if err != nil {
 		return fmt.Errorf("kvstore: creating checkpoint: %w", err)
 	}
-	if _, err := f.Write(encodeCheckpoint(seq, payload)); err != nil {
+	if _, err := f.WriteAt(encodeCheckpoint(seq, payload), 0); err != nil {
 		return joinClose(fmt.Errorf("kvstore: writing checkpoint: %w", err), f)
 	}
 	if err := f.Sync(); err != nil {
@@ -109,13 +104,13 @@ func writeCheckpoint(dir string, seq uint64, payload []byte) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("kvstore: closing checkpoint: %w", err)
 	}
-	if err := syncDir(dir); err != nil {
+	if err := fsys.syncDir(); err != nil {
 		return fmt.Errorf("kvstore: syncing directory before checkpoint rename: %w", err)
 	}
-	if err := os.Rename(tmp, checkpointPath(dir)); err != nil {
+	if err := fsys.rename(checkpointTempName, checkpointName); err != nil {
 		return fmt.Errorf("kvstore: installing checkpoint: %w", err)
 	}
-	if err := syncDir(dir); err != nil {
+	if err := fsys.syncDir(); err != nil {
 		return fmt.Errorf("kvstore: syncing directory after checkpoint rename: %w", err)
 	}
 	return nil
@@ -160,11 +155,11 @@ func (s *Store) checkpointLocked() error {
 		return nil
 	}
 
-	if err := writeCheckpoint(s.dir, seq, encodeState(s.data)); err != nil {
+	if err := writeCheckpoint(s.fsys, seq, encodeState(s.data)); err != nil {
 		return err
 	}
 
-	next, err := createSegment(s.dir, seq, s.opts.trace)
+	next, err := createSegment(s.fsys, seq, s.opts.trace)
 	if err != nil {
 		return err
 	}
@@ -174,7 +169,7 @@ func (s *Store) checkpointLocked() error {
 		return fmt.Errorf("kvstore: closing the checkpointed segment: %w", err)
 	}
 
-	bases, err := listSegments(s.dir)
+	bases, err := listSegments(s.fsys)
 	if err != nil {
 		return err
 	}
@@ -183,12 +178,12 @@ func (s *Store) checkpointLocked() error {
 		if base >= seq {
 			continue
 		}
-		if err := os.Remove(filepath.Join(s.dir, segmentName(base))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := s.fsys.remove(segmentName(base)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("kvstore: removing checkpointed segment: %w", err)
 		}
 		removed++
 	}
-	if err := syncDir(s.dir); err != nil {
+	if err := s.fsys.syncDir(); err != nil {
 		return fmt.Errorf("kvstore: syncing after removing checkpointed segments: %w", err)
 	}
 

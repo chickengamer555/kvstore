@@ -48,7 +48,9 @@ func (w *wal) flushPending() error {
 	if len(w.pending) == 0 {
 		return nil
 	}
-	if _, err := w.f.Write(w.pending); err != nil {
+	n, err := w.f.WriteAt(w.pending, w.wrote)
+	w.wrote += int64(n)
+	if err != nil {
 		return fmt.Errorf("kvstore: writing buffered log records: %w", err)
 	}
 	w.pending = w.pending[:0]
