@@ -122,6 +122,42 @@ func appendRecord(dst []byte, r record, prevCRC uint32) ([]byte, uint32) {
 // record and carry on": a gap in the chain is exactly the shape of the bug
 // this design exists to make impossible to miss.
 func decodeRecord(buf []byte, prevCRC uint32, wantSeq uint64) (record, int, uint32, error) {
-	// Not implemented yet - see record_test.go for what this has to do.
-	return record{}, 0, prevCRC, errTornRecord
+	if len(buf) < headerSize {
+		return record{}, 0, prevCRC, errTornRecord
+	}
+	stored := binary.LittleEndian.Uint32(buf[0:])
+	payload := int(binary.LittleEndian.Uint32(buf[4:]))
+	if payload > maxPayload {
+		return record{}, 0, prevCRC, errTornRecord
+	}
+	total := headerSize + payload
+	if len(buf) < total {
+		return record{}, 0, prevCRC, errTornRecord
+	}
+
+	crc := crc32.Update(prevCRC, castagnoli, buf[4:total])
+	if crc != stored {
+		return record{}, 0, prevCRC, errChecksum
+	}
+
+	// Past this line the bytes are vouched for, so the fields can be trusted.
+	seq := binary.LittleEndian.Uint64(buf[8:])
+	if seq != wantSeq {
+		return record{}, 0, prevCRC, errSequence
+	}
+	keyLen := int(binary.LittleEndian.Uint32(buf[17:]))
+	if keyLen > payload {
+		// The checksum passed, so this is not corruption - it is a record this
+		// build does not understand. Treated the same way regardless: stop.
+		return record{}, 0, prevCRC, errTornRecord
+	}
+
+	body := buf[headerSize:total]
+	r := record{
+		seq:   seq,
+		kind:  recordKind(buf[16]),
+		key:   string(body[:keyLen]),
+		value: append([]byte(nil), body[keyLen:]...),
+	}
+	return r, total, crc, nil
 }
