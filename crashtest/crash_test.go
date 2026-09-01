@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -632,4 +634,39 @@ func exeSuffix() string {
 		return ".exe"
 	}
 	return ""
+}
+
+// The README opens by saying the corpus is 240 seeds. CorpusFloor is 200, so
+// forty of them could be dropped and every gate here would stay green while
+// that first sentence quietly became false. That is the same drift
+// TestTheLineCountInTheReadmeIsTheLineCountOfTheTree exists to catch, and the
+// argument for asserting a printed number rather than typing it does not stop
+// at the line count. The floor and this are different checks: the floor says
+// the corpus is big enough to be evidence, this says the corpus is the size
+// the front page tells a reader it is.
+func TestTheCorpusSizeInTheReadmeIsTheSizeOfTheCorpus(t *testing.T) {
+	seeds := corpus(t)
+
+	readme, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading README.md: %v", err)
+	}
+	// The sentence wraps, so flatten whitespace before matching rather than
+	// depending on where the paragraph happens to break.
+	flat := strings.Join(strings.Fields(string(readme)), " ")
+	m := regexp.MustCompile(`a corpus of ([0-9]+) of them runs on every push`).FindStringSubmatch(flat)
+	if m == nil {
+		t.Fatal(`README.md no longer opens with a sentence of the form "a corpus of N of them runs on every push". If the claim has been dropped, drop this test with it; if it has been reworded, this test has stopped checking anything and that is worse than the drift it exists to catch`)
+	}
+	claimed, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("parsing the corpus size claimed in README.md: %v", err)
+	}
+
+	if claimed != len(seeds) {
+		t.Fatalf("README.md claims a corpus of %d seeds, corpus.txt holds %d", claimed, len(seeds))
+	}
+	if claimed < crashtest.CorpusFloor {
+		t.Fatalf("README.md claims %d seeds, which is below the floor of %d - the floor is the number that has to be defensible", claimed, crashtest.CorpusFloor)
+	}
 }
