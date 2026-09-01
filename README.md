@@ -11,46 +11,18 @@ which is the only way to catch a store that never called `fsync` at all.
 [![ci](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml/badge.svg)](https://github.com/chickengamer555/kvstore/actions/workflows/ci.yml)
 
 Read a green tick as one CI run, not as a track record. Two runs in that
-history are **red** and both are still in it rather than squashed out.
-
-Run [33354896330](https://github.com/chickengamer555/kvstore/actions/runs/33354896330)
-was a negative-control threshold set from a Windows measurement meeting Linux
-reality. What happened next is in [docs/verification.md](docs/verification.md);
-the number came down and the concession is written next to it.
-
-Run [33374624703](https://github.com/chickengamer555/kvstore/actions/runs/33374624703)
-went red on `windows-latest`, and this repository then described it wrongly in
-four places: first in a code comment at `318059e`, then on this page at
-`b58c076`, retracted at `a4b7b9e`. Those three SHAs are the duration, because a
-bare number here would be the third unchecked one in a row.
-**Nothing wedged and nothing deadlocked.** 186 of 240
-seeds finished, two failed by name, two were still running and fifty had not
-started when `go test`'s twenty-minute alarm arrived. The runner was slow - the
-root package takes 3.260s on `ubuntu-latest` and 166.127s on `windows-latest` in
-that same run - and a sixty-second watchdog measuring time since the child
-started reported itself as *"produced no output for 1m0s"*.
-
-The dump is quoted line by line, with the commands to pull it and the arithmetic
-that closes, in
-[docs/verification.md](docs/verification.md#run-33374624703-read-from-the-log-rather-than-from-its-message).
-So is how the wrong version got written, which is the part worth reading: a
-diagnostic named the wrong clock, and three inferences were stacked on it
-without anyone opening the artefact that was sitting in CI the whole time.
-
-Two things changed as a result. The bound is two clocks rather than one - an
-idle timer reset by every acknowledgement, a wall clock behind it, and a message
-that names which ran out and how many acknowledgements the child had made. And a
-seed that produces no observation is counted as one: the corpus reconciles the
-seeds it ran against the observations it made, and a run that does not add up
-fails and names them instead of printing the size of the corpus file. A reader
-could not previously tell a run of 240 seeds from a run of 238 that gave up on
-two.
+history are **red** and both are still in it rather than squashed out. One was
+a negative-control threshold set from a Windows measurement meeting Linux
+reality. The other went red on `windows-latest`, and this page then described
+it wrongly in four places before retracting it - nothing wedged and nothing
+deadlocked, the runner was slow and a watchdog named the wrong clock. Both
+post-mortems are in [docs/verification.md](docs/verification.md), quoted line
+by line, with the commands to pull the logs and the arithmetic that closes.
 
 **Check the badge against the tree.** A green tick is one run of one commit.
 `gh run list --limit 1` names the commit CI last saw and `git log --oneline -1`
-names the commit you are reading; anything between them is unproven on a runner.
-When this paragraph was written that gap was ten commits, and it included both
-of the changes described above.
+names the commit you are reading; anything between them is unproven on a
+runner.
 
 ## What it is
 
@@ -131,59 +103,6 @@ nothing, and a reader could reasonably think the 240-seed corpus had just gone
 by. There is no `-short` mode either; a subset run is a weaker claim wearing
 the same green tick.
 
-## What is claimed, and what checks it
-
-Six clauses, each with tests that map to it. `verify/kvstore.task.json` is the
-machine-readable version, written before the code.
-
-**An acknowledged write survives; an unacknowledged one need not.** The second
-half matters as much as the first: a suite that asserts every write survives a
-crash is testing that nothing crashed. The harness records exactly which writes
-were acknowledged, insists on every one, and permits the operation that was in
-flight when the process died to have happened or not.
-
-**Acknowledgement comes after the fsync, and a test can catch the store lying
-about it.** `write(2)` returning means the bytes are in the page cache and a
-power cut loses them, so the evidence cannot be an event the store emitted. It
-is the data: `Put`, cut the power, reopen, and the value has to be there. Until
-the simulated disk existed the evidence *was* an emitted event, and deleting
-`w.f.Sync()` left the entire suite green - the 240-seed corpus included. That
-build is a commit here, and the commit after it puts the line back.
-
-**The disk is allowed to say no.** A commit that fails part way leaves bytes
-the log cannot vouch for with the write offset already past them, so the
-*next* record lands beyond the point recovery stops at: fsynced, acknowledged,
-unreachable for ever. That was a real bug, found by the first test in this
-repository that ever made a filesystem call fail. A segment now refuses every
-write after a commit on it has failed.
-
-That closed half of it. The other half was found by a reviewer walking one step
-further along the same sequence: the *store* could still checkpoint, which
-rotates onto a fresh segment and leaves the poisoned one underneath it, and the
-next `Open` then deletes the successor the store had been acknowledging writes
-into. Two acknowledged keys gone on a healthy machine with no crash anywhere in
-the sequence. `checkpointLocked` now refuses to rotate off a segment recovery
-cannot vouch for, and `TestACheckpointNeverRotatesAwayFromAFailedSegment` is the
-test that was red first.
-
-**A record failing its checksum or its sequence chain ends recovery.** crc32c
-over each record's own bytes, chained to the previous record's checksum within
-its segment, plus a global sequence number. Recovery stops at the first record
-it cannot vouch for and never skips one. The chain restarts at each segment
-boundary, for a reason and with a consequence, and both are in
-[docs/verification.md](docs/verification.md).
-
-**Recovery is deterministic.** Every crashed directory in the corpus is copied
-and both copies recovered independently, then compared byte for byte - which is
-only true if the serialisation is sorted, because Go randomises map iteration.
-Two other places here made the same mistake after the first was fixed.
-
-**The log is bounded.** Checkpointing rotates the log and deletes what it
-supersedes, after the checkpoint is durable and never before. One test writes
-600KB against a 32KB bound and watches the live log peak at 32,400 bytes;
-another takes the power away afterwards, because a deletion that was made is
-not the same as a deletion that was made durable.
-
 ## Two harnesses, and what each one reaches
 
 **The crash corpus kills a real process**, at a randomised offset under a
@@ -252,6 +171,59 @@ can settle it, because the model would be checking its own assumption. It is
 the same residual as whether the hardware honours a flush, which neither
 harness touches and which `bench/results.md` records as unknown for the drive
 it ran on. The crash corpus still runs on Linux only.
+
+## What is claimed, and what checks it
+
+Six clauses, each with tests that map to it. `verify/kvstore.task.json` is the
+machine-readable version, written before the code.
+
+**An acknowledged write survives; an unacknowledged one need not.** The second
+half matters as much as the first: a suite that asserts every write survives a
+crash is testing that nothing crashed. The harness records exactly which writes
+were acknowledged, insists on every one, and permits the operation that was in
+flight when the process died to have happened or not.
+
+**Acknowledgement comes after the fsync, and a test can catch the store lying
+about it.** `write(2)` returning means the bytes are in the page cache and a
+power cut loses them, so the evidence cannot be an event the store emitted. It
+is the data: `Put`, cut the power, reopen, and the value has to be there. Until
+the simulated disk existed the evidence *was* an emitted event, and deleting
+`w.f.Sync()` left the entire suite green - the 240-seed corpus included. That
+build is a commit here, and the commit after it puts the line back.
+
+**The disk is allowed to say no.** A commit that fails part way leaves bytes
+the log cannot vouch for with the write offset already past them, so the
+*next* record lands beyond the point recovery stops at: fsynced, acknowledged,
+unreachable for ever. That was a real bug, found by the first test in this
+repository that ever made a filesystem call fail. A segment now refuses every
+write after a commit on it has failed.
+
+That closed half of it. The other half was found by a reviewer walking one step
+further along the same sequence: the *store* could still checkpoint, which
+rotates onto a fresh segment and leaves the poisoned one underneath it, and the
+next `Open` then deletes the successor the store had been acknowledging writes
+into. Two acknowledged keys gone on a healthy machine with no crash anywhere in
+the sequence. `checkpointLocked` now refuses to rotate off a segment recovery
+cannot vouch for, and `TestACheckpointNeverRotatesAwayFromAFailedSegment` is the
+test that was red first.
+
+**A record failing its checksum or its sequence chain ends recovery.** crc32c
+over each record's own bytes, chained to the previous record's checksum within
+its segment, plus a global sequence number. Recovery stops at the first record
+it cannot vouch for and never skips one. The chain restarts at each segment
+boundary, for a reason and with a consequence, and both are in
+[docs/verification.md](docs/verification.md).
+
+**Recovery is deterministic.** Every crashed directory in the corpus is copied
+and both copies recovered independently, then compared byte for byte - which is
+only true if the serialisation is sorted, because Go randomises map iteration.
+Two other places here made the same mistake after the first was fixed.
+
+**The log is bounded.** Checkpointing rotates the log and deletes what it
+supersedes, after the checkpoint is durable and never before. One test writes
+600KB against a 32KB bound and watches the live log peak at 32,400 bytes;
+another takes the power away afterwards, because a deletion that was made is
+not the same as a deletion that was made durable.
 
 ## Speed, and where this loses
 
