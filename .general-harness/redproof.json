@@ -462,6 +462,28 @@
       "contract_hash": "430c7b360401a958200d88c0b17f0eec0b000a7505a0ea55d86a1210baf04631",
       "gate_command": "go test -count=1 ./...",
       "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "platform-directory",
+      "case": "journalled-directory-keeps-the-segment-without-a-directory-sync",
+      "key": "platform-directory/journalled-directory-keeps-the-segment-without-a-directory-sync",
+      "matched_test": "TestAJournalledDirectoryKeepsTheSegmentWithoutADirectorySync",
+      "failed_at": "2026-09-01T01:36:28.486Z",
+      "contract_hash": "e56d637e0dfccbb9eb32d568fc25cb47bae4d91b293628ee742acb3975804b15",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
+    },
+    {
+      "task": "kvstore",
+      "unit": "crash-harness",
+      "case": "corpus-size-in-the-readme-is-the-size-of-the-corpus",
+      "key": "crash-harness/corpus-size-in-the-readme-is-the-size-of-the-corpus",
+      "matched_test": "TestTheCorpusSizeInTheReadmeIsTheSizeOfTheCorpus",
+      "failed_at": "2026-09-01T01:39:35.903Z",
+      "contract_hash": "e56d637e0dfccbb9eb32d568fc25cb47bae4d91b293628ee742acb3975804b15",
+      "gate_command": "go test -count=1 ./...",
+      "confidence": "exact"
     }
   ]
 }

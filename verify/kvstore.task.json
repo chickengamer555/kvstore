@@ -48,12 +48,44 @@
       "surface": "record.go",
       "tests": "record_test.go",
       "cases": [
-        { "id": "corrupt-byte-ends-recovery", "description": "a flipped byte inside a record is caught by the checksum; recovery stops at the previous record", "probe": true, "maps_to_clause": "B3" },
-        { "id": "torn-tail-record-discarded", "description": "a record truncated mid-write is discarded, not half-applied", "probe": true, "maps_to_clause": "B3" },
-        { "id": "sequence-break-ends-recovery", "description": "a broken sequence chain stops recovery rather than skipping the gap", "probe": true, "maps_to_clause": "B3" },
-        { "id": "lifted-segment-at-a-matching-boundary-is-accepted", "test_name": "TestASegmentLiftedFromAnotherStoreAtAMatchingBoundaryIsAccepted", "guard": true, "description": "a characterisation case, and the only one in this contract that records a limitation rather than a guarantee. The checksum chain restarts at zero at each segment boundary because a checkpoint may have deleted the segment the first record would otherwise chain to, so a whole segment taken from a different store and dropped in at a matching base is accepted and recovery serves the other store crash-safely and wrongly. A guard, not a probe, because there is no implementation it catches - it pins behaviour so the README cannot overstate the chaining again, and it names the line to rewrite if the boundary is ever closed. crc32c is a checksum, not a MAC: this is a crash model, not a threat model", "maps_to_clause": "B3" },
-        { "id": "absurd-length-field-is-a-torn-tail", "description": "a garbage length prefix is treated as end of log. Three lengths: one past the ceiling, most of a uint32, and the high bit set. The last two are arch-sensitive and were failing under GOARCH=386 from the day the test was written until 29145d4 - int is 32 bits there, so converting the on-disk uint32 before bounding it made the length negative and the slice bound after it negative too, which panics inside recovery. The description this case used to carry said the ceiling stops an allocation, and there is no allocation on this path", "probe": true, "maps_to_clause": "B3" },
-        { "id": "length-past-the-ceiling-stops-before-the-checksum", "test_name": "TestALengthPastTheCeilingStopsBeforeTheChecksum", "probe": true, "description": "a length past the ceiling, inside a buffer that is genuinely long enough to hold it. Every other length case in this unit is rejected because the buffer is too short, which is what a torn tail looks like and is not what a merely corrupt length looks like: with the ceiling deleted those cases stay green and this one does not. It is the case that makes the ceiling load-bearing on a 64-bit build rather than decorative", "maps_to_clause": "B3" }
+        {
+          "id": "corrupt-byte-ends-recovery",
+          "description": "a flipped byte inside a record is caught by the checksum; recovery stops at the previous record",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "torn-tail-record-discarded",
+          "description": "a record truncated mid-write is discarded, not half-applied",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "sequence-break-ends-recovery",
+          "description": "a broken sequence chain stops recovery rather than skipping the gap",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "lifted-segment-at-a-matching-boundary-is-accepted",
+          "test_name": "TestASegmentLiftedFromAnotherStoreAtAMatchingBoundaryIsAccepted",
+          "guard": true,
+          "description": "a characterisation case, and the only one in this contract that records a limitation rather than a guarantee. The checksum chain restarts at zero at each segment boundary because a checkpoint may have deleted the segment the first record would otherwise chain to, so a whole segment taken from a different store and dropped in at a matching base is accepted and recovery serves the other store crash-safely and wrongly. A guard, not a probe, because there is no implementation it catches - it pins behaviour so the README cannot overstate the chaining again, and it names the line to rewrite if the boundary is ever closed. crc32c is a checksum, not a MAC: this is a crash model, not a threat model",
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "absurd-length-field-is-a-torn-tail",
+          "description": "a garbage length prefix is treated as end of log. Three lengths: one past the ceiling, most of a uint32, and the high bit set. The last two are arch-sensitive and were failing under GOARCH=386 from the day the test was written until 29145d4 - int is 32 bits there, so converting the on-disk uint32 before bounding it made the length negative and the slice bound after it negative too, which panics inside recovery. The description this case used to carry said the ceiling stops an allocation, and there is no allocation on this path",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "length-past-the-ceiling-stops-before-the-checksum",
+          "test_name": "TestALengthPastTheCeilingStopsBeforeTheChecksum",
+          "probe": true,
+          "description": "a length past the ceiling, inside a buffer that is genuinely long enough to hold it. Every other length case in this unit is rejected because the buffer is too short, which is what a torn tail looks like and is not what a merely corrupt length looks like: with the ceiling deleted those cases stay green and this one does not. It is the case that makes the ceiling load-bearing on a 64-bit build rather than decorative",
+          "maps_to_clause": "B3"
+        }
       ]
     },
     {
@@ -61,10 +93,30 @@
       "surface": "wal.go, store.go",
       "tests": "durability_test.go",
       "cases": [
-        { "id": "acked-write-survives-immediate-kill", "description": "the bytes are on disk the instant Put returns: replaying the log file alone, with no in-memory state and no Close, yields the key", "probe": true, "maps_to_clause": "B1" },
-        { "id": "unacked-write-may-vanish", "description": "a write whose record was torn by the crash is permitted to be absent, and its absence is not reported as an error - asserts the suite does not over-claim", "maps_to_clause": "B1" },
-        { "id": "fsync-precedes-ack", "description": "the recorded event order is sync-start, sync-return, ack - never ack before sync-return", "probe": true, "maps_to_clause": "B2" },
-        { "id": "dir-fsync-on-log-create", "test_name": "TestPlatformReportsItsDirectorySyncGuaranteeHonestly", "description": "the store always reaches the directory-sync decision when a log segment is created, and what it reports about itself matches the build it is - claiming the guarantee where it has it and reporting it unavailable where it does not. This case is about honest self-report and nothing else; that the sync actually makes the entry durable is simulated-disk/new-segments-directory-entry-is-made-durable, because an emitted event cannot establish it", "probe": true, "maps_to_clause": "B2" }
+        {
+          "id": "acked-write-survives-immediate-kill",
+          "description": "the bytes are on disk the instant Put returns: replaying the log file alone, with no in-memory state and no Close, yields the key",
+          "probe": true,
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "unacked-write-may-vanish",
+          "description": "a write whose record was torn by the crash is permitted to be absent, and its absence is not reported as an error - asserts the suite does not over-claim",
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "fsync-precedes-ack",
+          "description": "the recorded event order is sync-start, sync-return, ack - never ack before sync-return",
+          "probe": true,
+          "maps_to_clause": "B2"
+        },
+        {
+          "id": "dir-fsync-on-log-create",
+          "test_name": "TestPlatformReportsItsDirectorySyncGuaranteeHonestly",
+          "description": "the store always reaches the directory-sync decision when a log segment is created, and what it reports about itself matches the build it is - claiming the guarantee where it has it and reporting it unavailable where it does not. This case is about honest self-report and nothing else; that the sync actually makes the entry durable is simulated-disk/new-segments-directory-entry-is-made-durable, because an emitted event cannot establish it",
+          "probe": true,
+          "maps_to_clause": "B2"
+        }
       ]
     },
     {
@@ -72,10 +124,31 @@
       "surface": "recover.go",
       "tests": "recover_test.go",
       "cases": [
-        { "id": "replay-is-byte-identical", "description": "two replays of one directory serialise to identical bytes", "probe": true, "maps_to_clause": "B4" },
-        { "id": "snapshot-order-independent-of-insert-order", "description": "two stores with the same final contents written in different orders serialise identically", "maps_to_clause": "B4" },
-        { "id": "gap-between-segments-stops-recovery", "test_name": "TestRecoveryRefusesToServeRecordsPastAMissingSegment", "probe": true, "description": "a directory holding a segment based at 0 and a segment based at 20 with the one based at 10 missing: recovery must stop at the hole and serve the records before it, never the records past it. Every segment starts its own checksum chain, so nothing inside the later segment is detectably wrong - the only evidence the missing records existed is that the second segment does not begin where the first one ended. This is the premise docs/verification.md leans on to downgrade the superseded-record skip, and it was untested until now", "maps_to_clause": "B1" },
-        { "id": "log-starting-past-the-checkpoint-is-refused", "test_name": "TestRecoveryRefusesToOpenWhenTheLogStartsPastTheCheckpoint", "probe": true, "description": "the oldest surviving segment begins after the sequence the checkpoint covers, so records in between are in neither file and no later comparison can detect it. Open must return an error rather than a store that is quietly missing writes", "maps_to_clause": "B1" }
+        {
+          "id": "replay-is-byte-identical",
+          "description": "two replays of one directory serialise to identical bytes",
+          "probe": true,
+          "maps_to_clause": "B4"
+        },
+        {
+          "id": "snapshot-order-independent-of-insert-order",
+          "description": "two stores with the same final contents written in different orders serialise identically",
+          "maps_to_clause": "B4"
+        },
+        {
+          "id": "gap-between-segments-stops-recovery",
+          "test_name": "TestRecoveryRefusesToServeRecordsPastAMissingSegment",
+          "probe": true,
+          "description": "a directory holding a segment based at 0 and a segment based at 20 with the one based at 10 missing: recovery must stop at the hole and serve the records before it, never the records past it. Every segment starts its own checksum chain, so nothing inside the later segment is detectably wrong - the only evidence the missing records existed is that the second segment does not begin where the first one ended. This is the premise docs/verification.md leans on to downgrade the superseded-record skip, and it was untested until now",
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "log-starting-past-the-checkpoint-is-refused",
+          "test_name": "TestRecoveryRefusesToOpenWhenTheLogStartsPastTheCheckpoint",
+          "probe": true,
+          "description": "the oldest surviving segment begins after the sequence the checkpoint covers, so records in between are in neither file and no later comparison can detect it. Open must return an error rather than a store that is quietly missing writes",
+          "maps_to_clause": "B1"
+        }
       ]
     },
     {
@@ -83,11 +156,37 @@
       "surface": "checkpoint.go",
       "tests": "checkpoint_test.go",
       "cases": [
-        { "id": "log-bounded-under-sustained-writes", "description": "live log segment bytes stay under the stated bound while total bytes written exceeds it by 10x or more", "probe": true, "maps_to_clause": "B6" },
-        { "id": "recovery-after-checkpoint-preserves-acked", "description": "acknowledged writes survive reopening after a checkpoint, including writes made before the checkpoint", "maps_to_clause": "B6" },
-        { "id": "stopped-replay-never-re-applies-superseded-records", "test_name": "TestAStoppedReplayNeverReAppliesSupersededRecords", "description": "a checkpoint at sequence 30 over a superseded segment holding records 1..15 and then a record that never finished. Replay stops inside the superseded range, so what it has applied is a PREFIX of records the checkpoint already covers, and a prefix puts stale values back over newer ones. Deleting the skip in loadDir turns this red on all ten keys and on the snapshot comparison - on data, not on the report field that was previously the only thing standing between this store and silent re-application. The directory is hand-built: it needs a torn tail in a segment that is not the last one, which the store does not currently produce, so this pins recovery against a log the FORMAT admits rather than a crash the store can take. The neighbouring window - every superseded record surviving - is idempotent and CANNOT fail on data, which is stated in both tests", "probe": true, "maps_to_clause": "B6" },
-        { "id": "unlink-order-other-than-oldest-first-loses-acknowledged-writes", "test_name": "TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites", "guard": true, "description": "the second characterisation case in this contract, and the measurement behind a premise the documentation argues from. checkpointLocked unlinks superseded segments oldest first, so a crash part way through leaves a suffix; two separate arguments here lean on that and neither had been measured against the alternative. Leave a prefix instead - the oldest segment still under a checkpoint that covers it, the live segment above the hole - and recovery stops at the hole and OpenWith then deletes everything past it: ten acknowledged records gone, no crash involved. A guard rather than a probe because it records what happens today rather than requiring it. Closing the gap means loadDir refusing to open when the stop is a gap between segments rather than a torn tail at the end, which changes when the store declines to open and has the 240-seed corpus downstream", "maps_to_clause": "B6" },
-        { "id": "partial-checkpoint-is-ignored", "description": "a checkpoint file left half-written by a crash is rejected by its checksum and recovery falls back to the log", "probe": true, "maps_to_clause": "B6" }
+        {
+          "id": "log-bounded-under-sustained-writes",
+          "description": "live log segment bytes stay under the stated bound while total bytes written exceeds it by 10x or more",
+          "probe": true,
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "recovery-after-checkpoint-preserves-acked",
+          "description": "acknowledged writes survive reopening after a checkpoint, including writes made before the checkpoint",
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "stopped-replay-never-re-applies-superseded-records",
+          "test_name": "TestAStoppedReplayNeverReAppliesSupersededRecords",
+          "description": "a checkpoint at sequence 30 over a superseded segment holding records 1..15 and then a record that never finished. Replay stops inside the superseded range, so what it has applied is a PREFIX of records the checkpoint already covers, and a prefix puts stale values back over newer ones. Deleting the skip in loadDir turns this red on all ten keys and on the snapshot comparison - on data, not on the report field that was previously the only thing standing between this store and silent re-application. The directory is hand-built: it needs a torn tail in a segment that is not the last one, which the store does not currently produce, so this pins recovery against a log the FORMAT admits rather than a crash the store can take. The neighbouring window - every superseded record surviving - is idempotent and CANNOT fail on data, which is stated in both tests",
+          "probe": true,
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "unlink-order-other-than-oldest-first-loses-acknowledged-writes",
+          "test_name": "TestAnUnlinkOrderOtherThanOldestFirstLosesAcknowledgedWrites",
+          "guard": true,
+          "description": "the second characterisation case in this contract, and the measurement behind a premise the documentation argues from. checkpointLocked unlinks superseded segments oldest first, so a crash part way through leaves a suffix; two separate arguments here lean on that and neither had been measured against the alternative. Leave a prefix instead - the oldest segment still under a checkpoint that covers it, the live segment above the hole - and recovery stops at the hole and OpenWith then deletes everything past it: ten acknowledged records gone, no crash involved. A guard rather than a probe because it records what happens today rather than requiring it. Closing the gap means loadDir refusing to open when the stop is a gap between segments rather than a torn tail at the end, which changes when the store declines to open and has the 240-seed corpus downstream",
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "partial-checkpoint-is-ignored",
+          "description": "a checkpoint file left half-written by a crash is rejected by its checksum and recovery falls back to the log",
+          "probe": true,
+          "maps_to_clause": "B6"
+        }
       ]
     },
     {
@@ -96,22 +195,139 @@
       "tests": "simdisk_test.go, powercut_test.go",
       "note": "The store writes through a simulated file whose bytes only become durable when Sync is called, so a power cut can be staged in-process. This is the only place in the repository where a missing fsync is detectable: after Process.Kill the page cache is intact, so the crash corpus cannot see one.",
       "cases": [
-        { "id": "acked-write-survives-a-power-cut", "test_name": "TestAckedWriteSurvivesASimulatedPowerCut", "description": "writes are acknowledged, the simulated power is cut with no Close, and a second store opened on the same platter returns every one of them - the assertion is on the data, not on any event or counter the store reports about itself", "probe": true, "maps_to_clause": "B2" },
-        { "id": "new-segments-directory-entry-is-made-durable", "test_name": "TestANewSegmentsDirectoryEntryIsMadeDurable", "description": "a newly created log segment is deleted by the simulated power cut unless the store has synced the containing directory, so removing fsys.syncDir() from createSegment loses the whole log. This proves the store PERFORMS the directory sync at the point it has to; whether the platform's implementation of that call makes the entry durable is a claim about the platform, made in syncdir_unix.go and syncdir_windows.go and not by this test", "probe": true, "maps_to_clause": "B2" },
-        { "id": "checkpointed-state-survives-a-power-cut", "test_name": "TestCheckpointedStateSurvivesASimulatedPowerCut", "description": "the same, driven past the checkpoint bound, so the checkpoint's own fsync and the ordering around it are covered too", "maps_to_clause": "B2" },
-        { "id": "torn-page-is-truncated-away-before-the-next-write", "test_name": "TestATornPageLeavesEveryAcknowledgedWriteRecoverable", "description": "an fsync is interrupted 30 bytes into a record, leaving a torn tail produced by the real write path rather than spliced in by the test; every acknowledged write before it is recoverable, the partial record is not returned, and - the half nothing else covered - the reopened log is cut back to the last vouched-for byte, so a write acknowledged after recovery is still readable after the next power cut", "probe": true, "maps_to_clause": "B3" },
-        { "id": "broken-build-fails-the-power-cut-test", "test_name": "TestTheBrokenBuildFailsThePowerCutTest", "description": "the deliberately broken kvearlyack build is required to FAIL the power-cut test, and to fail it by losing an acknowledged key rather than for any other reason. Deterministic on every platform, which the process-kill negative control is not: the same broken build and the same 24 seeds were caught 13 times on windows/amd64 and 4 times on ubuntu-latest", "probe": true, "maps_to_clause": "B5" },
-        { "id": "checkpoint-is-durable-as-soon-as-it-is-installed", "test_name": "TestTheCheckpointIsDurableAsSoonAsItIsInstalled", "description": "the power is taken out at the create immediately after the rename that installs a checkpoint, and the checkpoint has to be on the platter. rename(2) is atomic with respect to a reader, which is not the same as durable: until the directory is fsynced a reopening process still finds the old name. Deleting fsys.syncDir() after the rename in writeCheckpoint turns this red with recovery finding no checkpoint at all. Nothing is LOST either way - the ordering in checkpointLocked reverts the checkpoint and the deletions together and the test asserts that too - so what this pins is that the store having said it installed a checkpoint is true one instruction later", "probe": true, "maps_to_clause": "B6" },
-        { "id": "checkpoint-still-bounds-the-log-after-a-power-cut", "test_name": "TestACheckpointStillBoundsTheLogAfterAPowerCut", "description": "an unlink is a directory write, so until the directory is synced the entry comes back and with it the log the checkpoint had just superseded. Deleting s.fsys.syncDir() at the end of checkpointLocked turns this red, naming the segment that reappeared. Before the simulated disk staged metadata this deletion left all 28 root tests green", "probe": true, "maps_to_clause": "B6" },
-        { "id": "failed-sync-never-acknowledges", "test_name": "TestAFailedSyncNeverProducesAnAcknowledgement", "description": "an fsync that returns EIO has still returned, and the write it covered is not on the platter. This was red when written and found a real defect rather than a staged one: after a commit failed part way, w.wrote had moved past bytes the log could not vouch for, so the NEXT record was written beyond the point recovery stops at - fsynced, acknowledged and unreachable. The assertion is the contract itself, not the symptom: every key whose Put returned nil must be readable after the power cut", "probe": true, "maps_to_clause": "B1" },
-        { "id": "short-write-never-acknowledges", "test_name": "TestAShortWriteNeverProducesAnAcknowledgement", "description": "a WriteAt that takes ten bytes of a two-hundred-byte record and stops. Same defect, same red, same fix: the segment refuses every later write rather than chaining on top of a partial record", "probe": true, "maps_to_clause": "B1" },
-        { "id": "failed-write-never-acknowledges", "test_name": "TestAFailedWriteNeverProducesAnAcknowledgement", "guard": true, "description": "a WriteAt that takes no bytes at all. Declared a guard rather than a probe because it was green when written and I could not produce an honest implementation that it catches and the two cases above do not - nothing reached the file, so there is no gap to write past. It is here because a caller cannot tell how far a failed write got, so the guarantee must not depend on it", "maps_to_clause": "B1" },
-        { "id": "recovery-read-failure-is-not-the-end-of-the-log", "test_name": "TestARecoveryReadFailureIsReportedRatherThanTakenAsTheEndOfTheLog", "description": "a ReadAt that fails during replay must not be mistaken for the end of the log, or Open returns a store silently missing every record after the bad sector. Red proof: changing readErr = err to _ = err at file.go:173 turns it red reporting 0 applied records and 0 live keys - and left the whole suite green before this case existed", "probe": true, "maps_to_clause": "B3" },
-        { "id": "create-refuses-a-name-that-exists", "test_name": "TestCreatingAFileThatAlreadyExistsFails", "description": "file.go documents that create fails on an existing name and that checkpointLocked relies on it to catch a segment it would otherwise silently reopen and write over from the start. Red proof: removing os.O_EXCL from osFS.create turns it red, and left the whole suite green before this case existed", "probe": true, "maps_to_clause": "B6" },
-        { "id": "out-of-order-flush-is-not-skipped-over", "test_name": "TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery", "guard": true, "description": "a later page of a write is made durable while an earlier page of the same write is not, leaving a hole; recovery stops at the hole and never scans forward to the intact tail sitting beyond it. Declared a guard rather than a probe because it has no honest red proof: this store never had a scanning recovery to break, so there is no implementation of it that this case catches and record_test.go does not. Its value is that the shape is produced by the real write path and is one the crash corpus was measured to produce zero of.", "maps_to_clause": "B3" },
-        { "id": "failed-segment-reopens-and-resumes", "test_name": "TestAStoreWhoseSegmentFailedReopensAndResumes", "description": "a segment that refused writes after a commit failed has to come back. Reopening replays every record acknowledged before the failure, returns nothing the failed Puts wrote, leaves the segment holding exactly the bytes recovery vouched for, and takes a new write that survives the next power cut. Red proof: deleting the f.Truncate(validBytes) in reopenSegment turns it red on the length assertion, and that deletion left the whole suite green before this case existed - root package and 240-seed corpus both", "probe": true, "maps_to_clause": "B1" },
-        { "id": "checkpoint-never-rotates-away-from-a-failed-segment", "test_name": "TestACheckpointNeverRotatesAwayFromAFailedSegment", "description": "a short write poisons the live segment, and the caller then makes the exported Checkpoint() call the doc comment invites. checkpointLocked wrote the checkpoint, created the successor, moved s.log to it and only THEN got the stored failure back from closing the old segment - so it returned before unlinking anything, leaving a segment with a tail recovery cannot vouch for underneath a store now acknowledging writes into its successor. The next Open stops at that tail and DELETES the successor. Two acknowledged writes gone on a healthy machine with no crash, no torn page and no power cut anywhere in the sequence, and unrecoverable by hand afterwards because the successor is unlinked and the directory synced. The assertion is on the data: Checkpoint returns an error either way, because closing a failed segment reports the failure whether or not it was allowed to rotate first", "probe": true, "maps_to_clause": "B1" },
-        { "id": "power-cut-anywhere-in-the-checkpoint-path-loses-nothing", "test_name": "TestAPowerCutAnywhereInTheCheckpointPathLosesNothing", "description": "the power goes at the end of each of the ten filesystem calls the checkpoint path makes, one run per call, and every acknowledged key is still readable afterwards. This is the premise the removal of the directory sync before the checkpoint rename rests on: nothing is unlinked until the checkpoint that supersedes it is durable. It does NOT decide one directory sync against two - both pass, because the only difference is a stray CHECKPOINT.tmp no reader consults, and that is recorded as a gap rather than papered over. Red proof: unlinking the superseded segments before writeCheckpoint instead of after turns five of the ten crash points red, naming the keys that went", "probe": true, "maps_to_clause": "B6" }
+        {
+          "id": "acked-write-survives-a-power-cut",
+          "test_name": "TestAckedWriteSurvivesASimulatedPowerCut",
+          "description": "writes are acknowledged, the simulated power is cut with no Close, and a second store opened on the same platter returns every one of them - the assertion is on the data, not on any event or counter the store reports about itself",
+          "probe": true,
+          "maps_to_clause": "B2"
+        },
+        {
+          "id": "new-segments-directory-entry-is-made-durable",
+          "test_name": "TestANewSegmentsDirectoryEntryIsMadeDurable",
+          "description": "a newly created log segment is deleted by the simulated power cut unless the store has synced the containing directory, so removing fsys.syncDir() from createSegment loses the whole log. This proves the store PERFORMS the directory sync at the point it has to; whether the platform's implementation of that call makes the entry durable is a claim about the platform, made in syncdir_unix.go and syncdir_windows.go and not by this test",
+          "probe": true,
+          "maps_to_clause": "B2"
+        },
+        {
+          "id": "checkpointed-state-survives-a-power-cut",
+          "test_name": "TestCheckpointedStateSurvivesASimulatedPowerCut",
+          "description": "the same, driven past the checkpoint bound, so the checkpoint's own fsync and the ordering around it are covered too",
+          "maps_to_clause": "B2"
+        },
+        {
+          "id": "torn-page-is-truncated-away-before-the-next-write",
+          "test_name": "TestATornPageLeavesEveryAcknowledgedWriteRecoverable",
+          "description": "an fsync is interrupted 30 bytes into a record, leaving a torn tail produced by the real write path rather than spliced in by the test; every acknowledged write before it is recoverable, the partial record is not returned, and - the half nothing else covered - the reopened log is cut back to the last vouched-for byte, so a write acknowledged after recovery is still readable after the next power cut",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "broken-build-fails-the-power-cut-test",
+          "test_name": "TestTheBrokenBuildFailsThePowerCutTest",
+          "description": "the deliberately broken kvearlyack build is required to FAIL the power-cut test, and to fail it by losing an acknowledged key rather than for any other reason. Deterministic on every platform, which the process-kill negative control is not: the same broken build and the same 24 seeds were caught 13 times on windows/amd64 and 4 times on ubuntu-latest",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "checkpoint-is-durable-as-soon-as-it-is-installed",
+          "test_name": "TestTheCheckpointIsDurableAsSoonAsItIsInstalled",
+          "description": "the power is taken out at the create immediately after the rename that installs a checkpoint, and the checkpoint has to be on the platter. rename(2) is atomic with respect to a reader, which is not the same as durable: until the directory is fsynced a reopening process still finds the old name. Deleting fsys.syncDir() after the rename in writeCheckpoint turns this red with recovery finding no checkpoint at all. Nothing is LOST either way - the ordering in checkpointLocked reverts the checkpoint and the deletions together and the test asserts that too - so what this pins is that the store having said it installed a checkpoint is true one instruction later",
+          "probe": true,
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "checkpoint-still-bounds-the-log-after-a-power-cut",
+          "test_name": "TestACheckpointStillBoundsTheLogAfterAPowerCut",
+          "description": "an unlink is a directory write, so until the directory is synced the entry comes back and with it the log the checkpoint had just superseded. Deleting s.fsys.syncDir() at the end of checkpointLocked turns this red, naming the segment that reappeared. Before the simulated disk staged metadata this deletion left all 28 root tests green",
+          "probe": true,
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "failed-sync-never-acknowledges",
+          "test_name": "TestAFailedSyncNeverProducesAnAcknowledgement",
+          "description": "an fsync that returns EIO has still returned, and the write it covered is not on the platter. This was red when written and found a real defect rather than a staged one: after a commit failed part way, w.wrote had moved past bytes the log could not vouch for, so the NEXT record was written beyond the point recovery stops at - fsynced, acknowledged and unreachable. The assertion is the contract itself, not the symptom: every key whose Put returned nil must be readable after the power cut",
+          "probe": true,
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "short-write-never-acknowledges",
+          "test_name": "TestAShortWriteNeverProducesAnAcknowledgement",
+          "description": "a WriteAt that takes ten bytes of a two-hundred-byte record and stops. Same defect, same red, same fix: the segment refuses every later write rather than chaining on top of a partial record",
+          "probe": true,
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "failed-write-never-acknowledges",
+          "test_name": "TestAFailedWriteNeverProducesAnAcknowledgement",
+          "guard": true,
+          "description": "a WriteAt that takes no bytes at all. Declared a guard rather than a probe because it was green when written and I could not produce an honest implementation that it catches and the two cases above do not - nothing reached the file, so there is no gap to write past. It is here because a caller cannot tell how far a failed write got, so the guarantee must not depend on it",
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "recovery-read-failure-is-not-the-end-of-the-log",
+          "test_name": "TestARecoveryReadFailureIsReportedRatherThanTakenAsTheEndOfTheLog",
+          "description": "a ReadAt that fails during replay must not be mistaken for the end of the log, or Open returns a store silently missing every record after the bad sector. Red proof: changing readErr = err to _ = err at file.go:173 turns it red reporting 0 applied records and 0 live keys - and left the whole suite green before this case existed",
+          "probe": true,
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "create-refuses-a-name-that-exists",
+          "test_name": "TestCreatingAFileThatAlreadyExistsFails",
+          "description": "file.go documents that create fails on an existing name and that checkpointLocked relies on it to catch a segment it would otherwise silently reopen and write over from the start. Red proof: removing os.O_EXCL from osFS.create turns it red, and left the whole suite green before this case existed",
+          "probe": true,
+          "maps_to_clause": "B6"
+        },
+        {
+          "id": "out-of-order-flush-is-not-skipped-over",
+          "test_name": "TestAnOutOfOrderFlushIsNotSkippedOverOnRecovery",
+          "guard": true,
+          "description": "a later page of a write is made durable while an earlier page of the same write is not, leaving a hole; recovery stops at the hole and never scans forward to the intact tail sitting beyond it. Declared a guard rather than a probe because it has no honest red proof: this store never had a scanning recovery to break, so there is no implementation of it that this case catches and record_test.go does not. Its value is that the shape is produced by the real write path and is one the crash corpus was measured to produce zero of.",
+          "maps_to_clause": "B3"
+        },
+        {
+          "id": "failed-segment-reopens-and-resumes",
+          "test_name": "TestAStoreWhoseSegmentFailedReopensAndResumes",
+          "description": "a segment that refused writes after a commit failed has to come back. Reopening replays every record acknowledged before the failure, returns nothing the failed Puts wrote, leaves the segment holding exactly the bytes recovery vouched for, and takes a new write that survives the next power cut. Red proof: deleting the f.Truncate(validBytes) in reopenSegment turns it red on the length assertion, and that deletion left the whole suite green before this case existed - root package and 240-seed corpus both",
+          "probe": true,
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "checkpoint-never-rotates-away-from-a-failed-segment",
+          "test_name": "TestACheckpointNeverRotatesAwayFromAFailedSegment",
+          "description": "a short write poisons the live segment, and the caller then makes the exported Checkpoint() call the doc comment invites. checkpointLocked wrote the checkpoint, created the successor, moved s.log to it and only THEN got the stored failure back from closing the old segment - so it returned before unlinking anything, leaving a segment with a tail recovery cannot vouch for underneath a store now acknowledging writes into its successor. The next Open stops at that tail and DELETES the successor. Two acknowledged writes gone on a healthy machine with no crash, no torn page and no power cut anywhere in the sequence, and unrecoverable by hand afterwards because the successor is unlinked and the directory synced. The assertion is on the data: Checkpoint returns an error either way, because closing a failed segment reports the failure whether or not it was allowed to rotate first",
+          "probe": true,
+          "maps_to_clause": "B1"
+        },
+        {
+          "id": "power-cut-anywhere-in-the-checkpoint-path-loses-nothing",
+          "test_name": "TestAPowerCutAnywhereInTheCheckpointPathLosesNothing",
+          "description": "the power goes at the end of each of the ten filesystem calls the checkpoint path makes, one run per call, and every acknowledged key is still readable afterwards. This is the premise the removal of the directory sync before the checkpoint rename rests on: nothing is unlinked until the checkpoint that supersedes it is durable. It does NOT decide one directory sync against two - both pass, because the only difference is a stray CHECKPOINT.tmp no reader consults, and that is recorded as a gap rather than papered over. Red proof: unlinking the superseded segments before writeCheckpoint instead of after turns five of the ten crash points red, naming the keys that went",
+          "probe": true,
+          "maps_to_clause": "B6"
+        }
+      ]
+    },
+    {
+      "id": "platform-directory",
+      "surface": "syncdir_unix.go, syncdir_windows.go, file.go",
+      "tests": "journalleddir_test.go",
+      "note": "Two knobs, because they are two questions. Whether the store's syncDir does anything is the PLATFORM's code - a real fsync(2) in syncdir_unix.go, a no-op in syncdir_windows.go. Whether the directory is journalled is the FILESYSTEM's behaviour - ext4 data=ordered against NTFS $LogFile. The Windows build is the first paired with the second, and nothing in simdisk_test.go could express that pairing before. What this unit proves is the store being correct GIVEN the documented NTFS contract; whether NTFS honours that contract is not reachable by any model here, and docs/verification.md files that residual rather than closing it.",
+      "cases": [
+        {
+          "id": "journalled-directory-keeps-the-segment-without-a-directory-sync",
+          "test_name": "TestAJournalledDirectoryKeepsTheSegmentWithoutADirectorySync",
+          "probe": true,
+          "description": "under the NTFS rule - metadata journalled, so a create is durable as it is issued - a no-op syncDir still leaves an acknowledged write recoverable across a power cut. This is the Windows pairing, and it is the case that says syncdir_windows.go's twenty-line argument is correct rather than merely written down",
+          "maps_to_clause": "B2"
+        },
+        {
+          "id": "unjournalled-directory-loses-the-segment-without-a-directory-sync",
+          "test_name": "TestAnUnjournalledDirectoryLosesTheSegmentWithoutADirectorySync",
+          "guard": true,
+          "description": "the control, and a guard rather than a probe because it passes from the first commit on purpose and there is no implementation bug it catches. The same no-op syncDir against the POSIX rule LOSES the acknowledged write, which is why syncdir_unix.go exists. Without it the journalled assertion above would be vacuous in a way no red proof could reveal: it could pass against a simulated disk that had quietly stopped modelling directory entries at all, which is the same trap TestANewSegmentsDirectoryEntryIsMadeDurable guards with its orphan preamble",
+          "maps_to_clause": "B2"
+        }
       ]
     },
     {
@@ -119,18 +335,91 @@
       "surface": "crashtest/",
       "tests": "crashtest/crash_test.go, crashtest/tally_test.go",
       "cases": [
-        { "id": "seeded-corpus-no-acked-loss", "description": "the recorded seed corpus runs end to end with zero acknowledged writes lost and zero corrupt reads", "probe": true, "maps_to_clause": "B5" },
-        { "id": "kill-points-are-spread", "description": "the corpus kills children at a spread of different points, not the same one every time - a degenerate spread would make the corpus size meaningless", "probe": true, "maps_to_clause": "B5" },
-        { "id": "seed-reproduces-failure", "description": "a deliberately unsynced build fails under the harness, prints its seed, and that seed reproduces the identical failure while the honest build passes it", "probe": true, "maps_to_clause": "B5" },
-        { "id": "corpus-size-floor", "description": "the recorded corpus is at least 200 seeds and the count is printed", "maps_to_clause": "B5" },
-        { "id": "replayed-findings-are-in-a-stable-order", "test_name": "TestReplayedFindingsAreInAStableOrder", "description": "replaying one preserved crash directory five times produces the identical findings in the identical order, compared verbatim rather than by category and count. The previous test compared sorted Kinds() and len(Failures), which is shaped around the map-order defect instead of catching it", "probe": true, "maps_to_clause": "B4" },
-        { "id": "every-recovery-shape-is-tallied", "test_name": "TestEveryRecoveryShapeIsTallied", "description": "the shape tally prints a row for every shape the classifier can produce, zeros included, and the enumerated set cannot drift away from the classifier. The README leans on three zero rows and the command that is offered as the check could not emit one", "probe": true, "maps_to_clause": "B5" },
-        { "id": "unattempted-seeds-are-named-not-counted", "test_name": "TestATallyNamesTheSeedsItNeverAttempted", "description": "a run that goes short names the seeds it never reached rather than reporting a count of them. \"9 never attempted\" tells a reader the corpus was short and gives them nothing to re-run, which is the one thing the whole seeded design is for. Red proof: the first version of the tally computed the shortfall as corpus minus observations minus attempts and had no seed identities to print", "probe": true, "maps_to_clause": "B5" },
-        { "id": "one-seed-cannot-stand-in-for-another", "test_name": "TestATallyDoesNotReconcileWhenOneSeedStandsInForAnother", "description": "two observations of seed 11 and none of seed 22 is two observations over a corpus of two: the arithmetic balances and a count-based reconciliation reports a complete corpus while one seed stood in for another. Red proof: the first version compared totals, and this reconciled green", "probe": true, "maps_to_clause": "B5" },
-        { "id": "observation-outside-the-corpus-is-refused", "test_name": "TestATallyRejectsAnObservationForASeedThatIsNotInTheCorpus", "description": "an observation recorded for a seed that is not in the corpus being reconciled against means the thing feeding the tally and the thing checking it disagree about what is being run, and the totals can still balance while it happens. Red proof: the first version compared totals and reconciled green over it", "probe": true, "maps_to_clause": "B5" },
-        { "id": "the-observation-count-cannot-be-had-without-the-verdict", "test_name": "TestTheObservationCountCannotBeObtainedWithoutTheVerdict", "description": "Tally's doc comment claims the count and the verdict come out of the same call, so a caller cannot print the reassuring half without being handed the other half. That is a claim about the API surface and one exported method returning a bare count falsifies it. Red proof: Observations() int existed and this named it. What the case does NOT establish: that a caller prints both halves - only that it was told both", "probe": true, "maps_to_clause": "B5" },
-        { "id": "a-short-corpus-fails-rather-than-reporting-its-size", "test_name": "TestAShortCorpusFailsRatherThanReportingItsSize", "guard": true, "description": "the link between the tally and the corpus: given a reconciliation that does not add up, the corpus test fails and the failure names the seeds that went unrun; given one that does, it logs the line on the green path too, because a number that only appears when something went wrong is not evidence that anything went right. A guard rather than a probe because the behaviour was written inline in TestSeededCorpusNoAckedLoss and already held - extracting it made it reachable, it catches no implementation that ever shipped. It was checked in both directions: deleting the failure branch turns it red naming the short run. What it does NOT establish is that t.Errorf inside t.Cleanup fails the package, which is the standard library's guarantee and is not re-proven here", "maps_to_clause": "B5" },
-        { "id": "crash-corpus-recovery-is-deterministic", "description": "every directory left behind by the corpus replays to byte-identical state twice", "probe": true, "maps_to_clause": "B4" }
+        {
+          "id": "seeded-corpus-no-acked-loss",
+          "description": "the recorded seed corpus runs end to end with zero acknowledged writes lost and zero corrupt reads",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "kill-points-are-spread",
+          "description": "the corpus kills children at a spread of different points, not the same one every time - a degenerate spread would make the corpus size meaningless",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "seed-reproduces-failure",
+          "description": "a deliberately unsynced build fails under the harness, prints its seed, and that seed reproduces the identical failure while the honest build passes it",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "corpus-size-floor",
+          "description": "the recorded corpus is at least 200 seeds and the count is printed",
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "replayed-findings-are-in-a-stable-order",
+          "test_name": "TestReplayedFindingsAreInAStableOrder",
+          "description": "replaying one preserved crash directory five times produces the identical findings in the identical order, compared verbatim rather than by category and count. The previous test compared sorted Kinds() and len(Failures), which is shaped around the map-order defect instead of catching it",
+          "probe": true,
+          "maps_to_clause": "B4"
+        },
+        {
+          "id": "every-recovery-shape-is-tallied",
+          "test_name": "TestEveryRecoveryShapeIsTallied",
+          "description": "the shape tally prints a row for every shape the classifier can produce, zeros included, and the enumerated set cannot drift away from the classifier. The README leans on three zero rows and the command that is offered as the check could not emit one",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "unattempted-seeds-are-named-not-counted",
+          "test_name": "TestATallyNamesTheSeedsItNeverAttempted",
+          "description": "a run that goes short names the seeds it never reached rather than reporting a count of them. \"9 never attempted\" tells a reader the corpus was short and gives them nothing to re-run, which is the one thing the whole seeded design is for. Red proof: the first version of the tally computed the shortfall as corpus minus observations minus attempts and had no seed identities to print",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "one-seed-cannot-stand-in-for-another",
+          "test_name": "TestATallyDoesNotReconcileWhenOneSeedStandsInForAnother",
+          "description": "two observations of seed 11 and none of seed 22 is two observations over a corpus of two: the arithmetic balances and a count-based reconciliation reports a complete corpus while one seed stood in for another. Red proof: the first version compared totals, and this reconciled green",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "observation-outside-the-corpus-is-refused",
+          "test_name": "TestATallyRejectsAnObservationForASeedThatIsNotInTheCorpus",
+          "description": "an observation recorded for a seed that is not in the corpus being reconciled against means the thing feeding the tally and the thing checking it disagree about what is being run, and the totals can still balance while it happens. Red proof: the first version compared totals and reconciled green over it",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "the-observation-count-cannot-be-had-without-the-verdict",
+          "test_name": "TestTheObservationCountCannotBeObtainedWithoutTheVerdict",
+          "description": "Tally's doc comment claims the count and the verdict come out of the same call, so a caller cannot print the reassuring half without being handed the other half. That is a claim about the API surface and one exported method returning a bare count falsifies it. Red proof: Observations() int existed and this named it. What the case does NOT establish: that a caller prints both halves - only that it was told both",
+          "probe": true,
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "a-short-corpus-fails-rather-than-reporting-its-size",
+          "test_name": "TestAShortCorpusFailsRatherThanReportingItsSize",
+          "guard": true,
+          "description": "the link between the tally and the corpus: given a reconciliation that does not add up, the corpus test fails and the failure names the seeds that went unrun; given one that does, it logs the line on the green path too, because a number that only appears when something went wrong is not evidence that anything went right. A guard rather than a probe because the behaviour was written inline in TestSeededCorpusNoAckedLoss and already held - extracting it made it reachable, it catches no implementation that ever shipped. It was checked in both directions: deleting the failure branch turns it red naming the short run. What it does NOT establish is that t.Errorf inside t.Cleanup fails the package, which is the standard library's guarantee and is not re-proven here",
+          "maps_to_clause": "B5"
+        },
+        {
+          "id": "crash-corpus-recovery-is-deterministic",
+          "description": "every directory left behind by the corpus replays to byte-identical state twice",
+          "probe": true,
+          "maps_to_clause": "B4"
+        },
+        {
+          "id": "corpus-size-in-the-readme-is-the-size-of-the-corpus",
+          "test_name": "TestTheCorpusSizeInTheReadmeIsTheSizeOfTheCorpus",
+          "probe": true,
+          "description": "the README's opening sentence claims 240 seeds; CorpusFloor is 200 and the generator comparison is prefix-only, so forty could be trimmed with every gate still green while the first thing a reader sees became false. Separate from corpus-size-floor on purpose: the floor says the corpus is large enough to be evidence, this says it is the size the front page claims",
+          "maps_to_clause": "B5"
+        }
       ]
     }
   ],
