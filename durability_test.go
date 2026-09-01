@@ -251,9 +251,15 @@ func TestPlatformReportsItsDirectorySyncGuaranteeHonestly(t *testing.T) {
 		}
 		// This is the one statement on this platform that nothing here checks,
 		// and it is a claim about the filesystem rather than about the store.
-		// It is logged so that a green run on Windows does not read as though
-		// it had been established.
-		t.Logf("NOT VERIFIED BY ANYTHING HERE, on %s: %s", g.Platform, g.DirSyncNote)
+		//
+		// Go has no verdict between PASS and FAIL, so the word has to be in the
+		// output: BLOCKED means the clause was not checked here, which is not
+		// the same as checked and fine. Failing would be worse - the code is
+		// not broken, only unverifiable on this platform - and passing silently
+		// is what the contract forbids. The token is the same one the negative
+		// controls use when the toolchain is missing, and ci.yml greps for it
+		// rather than taking this comment's word for it.
+		t.Logf("BLOCKED: directory fsync is NOT VERIFIED BY ANYTHING HERE, on %s: %s", g.Platform, g.DirSyncNote)
 	}
 
 	// The build tags are the thing most likely to rot here, so pin the one

@@ -59,6 +59,34 @@ jobs:
       - name: test
         run: go test -v -count=1 -timeout 20m ./...
 
+      # The comment at the top of this file says the directory-fsync case
+      # reports BLOCKED on Windows. That was an unchecked claim about this
+      # repository's own CI for as long as it stood there, which is the exact
+      # shape of thing the rest of the project refuses to ship. So check it:
+      # the token must be present where the syscall does not exist, and absent
+      # where it does - a Linux run that starts reporting BLOCKED has lost the
+      # verification, and that must be loud rather than green.
+      - name: the directory-fsync case reports its verdict for this platform
+        shell: bash
+        run: |
+          log=$(go test -v -count=1 -run TestPlatformReportsItsDirectorySyncGuaranteeHonestly ./)
+          echo "$log"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "$log" | grep -q "BLOCKED: directory fsync is NOT VERIFIED BY ANYTHING HERE, on windows:" || {
+              echo "::error::no BLOCKED line on a platform without directory fsync - a silent green is exactly what the contract forbids"
+              exit 1
+            }
+          else
+            if echo "$log" | grep -q "BLOCKED: directory fsync"; then
+              echo "::error::directory fsync reported BLOCKED on ${{ matrix.os }}, where it is supposed to be verified - the build tags have rotted"
+              exit 1
+            fi
+            echo "$log" | grep -q -- "--- PASS: TestPlatformReportsItsDirectorySyncGuaranteeHonestly" || {
+              echo "::error::the directory-fsync case did not pass on a platform that has the syscall"
+              exit 1
+            }
+          fi
+
       # A 32-bit build, executed rather than merely compiled, because the bug
       # this catches only exists where int is 32 bits: record.go reads an
       # on-disk uint32 length field, and converting it to int before bounding
