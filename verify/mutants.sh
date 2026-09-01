@@ -24,7 +24,18 @@
 #
 # The README line-count assertion is excluded, because several of these
 # mutations change the number of lines in the tree and it would fire on the
-# arithmetic rather than on the behaviour. Nothing else is excluded.
+# arithmetic rather than on the behaviour. Nothing else is excluded, and that
+# sentence used to be false: mutant 8 was declared covered by the
+# walpolicy_earlyack build-tag control and never run. It is not covered by it.
+# The earlyack control buffers records in user space, which is the bug a
+# process kill CAN see, and walpolicy_earlyack.go says in its own comment that
+# removing the fsync would NOT work as a control, because after Process.Kill
+# the page cache is intact and the kernel writes the data out anyway. Missing
+# fsync and early acknowledgement are two different bugs reached by two
+# different harnesses. So the one sentence walpolicy.go stakes itself on -
+# delete the Sync and TestAckedWriteSurvivesASimulatedPowerCut fails - was
+# vouched for by a commit message rather than by the script written to vouch
+# for exactly that kind of claim. It runs now.
 #
 # It runs the ROOT package only. The 240-seed crash corpus is 150 seconds a
 # run, which would make this twenty minutes and nobody would run it. That is a
@@ -56,7 +67,7 @@ mutants=(
 '5|recover.go|re-apply superseded records instead of skipping them|s@^\t\t\tif r.seq <= st.report.CheckpointSeq {$@\t\t\tif false {@'
 '6|recover.go|keep the segments past the point replay stopped|s@^\t\tst.drop = append(st.drop, segs\[stopAt+1:\]...)$@\t\t_ = stopAt@'
 '7|record.go|accept a length field the record cannot contain|s@^\tif claimed > maxPayload {$@\tif false {@'
-'8|wal.go|acknowledge before the fsync rather than after it|'
+'8|walpolicy.go|do not fsync the log before acknowledging the write|s@^	if err := w.f.Sync(); err != nil {$@	if err := error(nil); err != nil {@'
 )
 
 run_one() {
@@ -65,16 +76,6 @@ run_one() {
   id="${spec%%|*}"; spec="${spec#*|}"
   file="${spec%%|*}"; spec="${spec#*|}"
   what="${spec%%|*}"; expr="${spec#*|}"
-
-  if [ -z "$expr" ]; then
-    # Not a gap: this one already exists as a build-tag negative control -
-    # walpolicy_earlyack.go, run in CI, and the test that shells out to it
-    # fails if the build it produces is NOT caught. Doing it here as well would
-    # be a second copy of a control that is already stronger than a mutant,
-    # because it survives in the tree instead of being reconstructed by sed.
-    printf '%-3s %-14s %-52s SKIP  (covered by the walpolicy_earlyack control)\n' "$id" "$file" "$what"
-    return
-  fi
 
   local before after
   before=$(git hash-object "$file")
