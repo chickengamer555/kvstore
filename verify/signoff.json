@@ -1,0 +1,15 @@
+{
+  "task": "kvstore",
+  "contract_hash": "e56d637e0dfc",
+  "signed_by": "Lido Wright <wrightlido@gmail.com>",
+  "signed_at": "2026-09-01T02:20:00Z",
+  "decision": "approved for publication",
+  "what_was_approved": "The six clauses B1-B6 as they stand in verify/kvstore.task.json, and the claims the README makes about them. The contract was written before the store existed; this records the human approval of it and of going public.",
+  "known_limits_accepted": [
+    "The oracle and the implementation have the same author. A model check catches divergence from this author's understanding of correctness, not from a specification. There is no external conformance suite for embedded KV durability, and the README says so.",
+    "The 240-seed crash corpus cannot detect a missing fsync at all: after Process.Kill the page cache is intact. Only the simulated disk reaches that, and the simulated disk is a model of POSIX rather than a kernel.",
+    "Directory fsync is a POSIX claim. On Windows the case reports BLOCKED naming the platform, and CI enforces that the token is present there and absent on Linux. Windows durability rests on documented NTFS behaviour that nothing here verifies.",
+    "42 red proofs were recorded against an earlier contract hash. The change since was verified field by field to be purely additive - three cases and one unit added, nothing removed or altered - so the proofs are genuine observations that were not re-manufactured to refresh a hash.",
+    "68 fmt.Print calls are flagged by the integrity heuristic. All 68 are in bench/main.go and crashtest/cmd/crashrepro/main.go, two command-line programs whose printed output is their product. None are in the library."
+  ]
+}
