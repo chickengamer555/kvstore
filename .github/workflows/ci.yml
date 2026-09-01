@@ -27,7 +27,19 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    timeout-minutes: 25
+    # 25 was too tight and had been for a while, which only showed up when a
+    # commit added eighty seconds. Measured on windows-latest: the suite is
+    # 835s and `where the kills landed` is another 560s, because the 240-seed
+    # corpus is run twice - once by `go test`, once by crashrepro to report
+    # where the kills fell. Plus setup that is 24m20s against a 25m budget.
+    # Run 33450457274 finished in 23m45s and run 33458728917 in 24m31s; run
+    # 33460609469 was cancelled mid-step at 25m07s.
+    #
+    # The budget goes up rather than a step coming out. Dropping the shapes
+    # report to fit would trade a measurement for a number, and windows-latest
+    # is the runner with the wide variance - the root package alone has been
+    # seen at 3.260s on ubuntu and 166.127s here in the same run.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
